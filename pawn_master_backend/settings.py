@@ -16,6 +16,7 @@ from datetime import timedelta
 import os
 
 
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -236,6 +237,6 @@ from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
     'make-api-call-every-minute': {
         'task': 'core.tasks.make_api_call',
-        'schedule': 60.0,# every 60 seconds
+        'schedule': timedelta(hours=23)
     },
 }
