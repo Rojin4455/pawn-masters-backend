@@ -17,6 +17,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from .serializers import UserSerializer, RegisterSerializer
+from accounts_management_app.models import TextMessage
 
 
 # Create your views here.
@@ -76,7 +77,7 @@ def tokens(request):
             }, status=400)
         
 
-        location_name = get_location_name(location_id=response_data.get("locationId"), access_token=response_data.get('access_token'))
+        location_name, timezone = get_location_name(location_id=response_data.get("locationId"), access_token=response_data.get('access_token'))
         
 
         obj, created = GHLAuthCredentials.objects.update_or_create(
@@ -90,6 +91,7 @@ def tokens(request):
                 "company_id": response_data.get("companyId"),
                 "user_id":response_data.get("userId"),
                 "location_name":location_name,
+                "timezone": timezone
             }
         )
         query_params = urlencode({
@@ -163,3 +165,12 @@ class LogoutView(APIView):
 #             serializer.save()
 #             return Response(serializer.data)
 #         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# import math
+# text = TextMessage.objects.get(message_id='jWtWLCzqunerFNIwr7eK')
+# print("conversation_id:    ",text.conversation.conversation_id)
+# print("text: ", len(text.body))
+
+# print("segmants:    ",math.ceil(len(text.body) / 160))
+# print(text.conversation.contact.phone)
