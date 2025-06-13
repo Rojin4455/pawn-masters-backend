@@ -2,6 +2,7 @@ import requests
 from celery import shared_task
 from core.models import GHLAuthCredentials
 from decouple import config
+from accounts_management_app.services import fetch_all_contacts, sync_conversations_with_messages
 
 @shared_task
 def make_api_call():
@@ -35,3 +36,14 @@ def make_api_call():
                 }
             )
         print("refreshed: ", obj)
+
+
+
+
+@shared_task
+def async_fetch_all_contacts(location_id, access_token):
+    fetch_all_contacts(location_id, access_token)
+
+@shared_task
+def async_sync_conversations_with_messages(location_id, access_token):
+    sync_conversations_with_messages(location_id, access_token)

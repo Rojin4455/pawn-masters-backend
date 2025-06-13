@@ -25,6 +25,7 @@ from accounts_management_app.models import TextMessage
 GHL_CLIENT_ID = config("GHL_CLIENT_ID")
 GHL_CLIENT_SECRET = config("GHL_CLIENT_SECRET")
 GHL_REDIRECTED_URI = config("GHL_REDIRECTED_URI")
+FRONTEND_URL = config("FRONTEND_URL")
 TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token"
 SCOPE = config("SCOPE")
 
@@ -45,7 +46,7 @@ def callback(request):
     if not code:
         return JsonResponse({"error": "Authorization code not received from OAuth"}, status=400)
 
-    return redirect(f'{config("BASE_URI")}/core/auth/tokens?code={code}')
+    return redirect(f'{config("BASE_URI")}/api/core/auth/tokens?code={code}')
 
 
 def tokens(request):
@@ -99,7 +100,8 @@ def tokens(request):
             "company_name": "Pawn Leads"
         })
 
-        frontend_url = f"http://localhost:3000/admin/success-onboard?{query_params}"
+        frontend_url = f"{FRONTEND_URL}/admin/settings/sms-groups?{query_params}"
+        
         return redirect(frontend_url)
         
     except requests.exceptions.JSONDecodeError:

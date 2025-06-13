@@ -22,5 +22,4 @@ urlpatterns = [
     path("api/core/", include("core.urls")),
     path("api/category/", include("category_app.urls")),
     path("api/accounts/", include("accounts_management_app.urls"))
-
 ]

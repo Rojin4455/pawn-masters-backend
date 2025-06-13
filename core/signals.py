@@ -3,6 +3,9 @@ from django.db.models.signals import pre_save
 from django.dispatch import receiver
 from .models import GHLAuthCredentials
 from accounts_management_app.services import fetch_all_contacts, sync_conversations_with_messages
+from .tasks import async_fetch_all_contacts, async_sync_conversations_with_messages
+from celery import chain
+
 
 
 @receiver(pre_save, sender=GHLAuthCredentials)
@@ -16,15 +19,20 @@ def trigger_on_approval(sender, instance, **kwargs):
     except GHLAuthCredentials.DoesNotExist:
         return
 
-    # Check if is_approved changed from False to True
     if not previous.is_approved and instance.is_approved:
+        tasks_to_run = []
+        
         if not instance.is_contact_pulled:
-            fetch_all_contacts(instance.location_id, instance.access_token)
+            tasks_to_run.append(async_fetch_all_contacts.s(instance.location_id, instance.access_token))
             instance.is_contact_pulled = True
-            instance.save()
+        
         if not instance.is_conversation_pulled:
-            sync_conversations_with_messages(instance.location_id, instance.access_token)
+            tasks_to_run.append(async_sync_conversations_with_messages.s(instance.location_id, instance.access_token))
             instance.is_conversation_pulled = True
+        
+        if tasks_to_run:
+            # Execute tasks in sequence
+            chain(*tasks_to_run).delay()
             instance.save()
 
 

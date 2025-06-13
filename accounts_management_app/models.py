@@ -1,6 +1,6 @@
 from django.db import models
+from django.core.exceptions import ValidationError
 from core.models import GHLAuthCredentials
-import math
 
 class Contact(models.Model):
     contact_id = models.CharField(max_length=100, unique=True)
@@ -105,4 +105,8 @@ class TextMessage(models.Model):
     
     def __str__(self):
         return f"Message {self.message_id} - {self.message_type} ({self.direction}) - {self.segments} segments"
+
+
+
+
 

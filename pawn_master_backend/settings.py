@@ -88,6 +88,7 @@ REST_FRAMEWORK = {
 
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS").split(",")
+CSRF_TRUSTED_ORIGINS = config("CSRF_TRUSTED_ORIGINS").split(",")
 
 
 CORS_ALLOW_CREDENTIALS = True
@@ -105,11 +106,9 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
 ]
 
-# CSRF Settings (optional, for additional security)
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+
+
+
 
 
 ROOT_URLCONF = 'pawn_master_backend.urls'
@@ -237,6 +236,6 @@ from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
     'make-api-call-every-minute': {
         'task': 'core.tasks.make_api_call',
-        'schedule': timedelta(hours=23)
+        'schedule': timedelta(hours=10)
     },
 }
