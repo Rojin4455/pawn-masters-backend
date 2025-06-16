@@ -96,8 +96,7 @@ def tokens(request):
             }
         )
         query_params = urlencode({
-            "location_name": location_name,
-            "company_name": "Pawn Leads"
+            "locationId":response_data.get("locationId"),
         })
 
         frontend_url = f"{FRONTEND_URL}/admin/settings/sms-groups?{query_params}"
