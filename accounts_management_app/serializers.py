@@ -3,9 +3,12 @@ from core.models import GHLAuthCredentials,SMSDefaultConfiguration
 from rest_framework import serializers
 from decimal import Decimal
 from rest_framework import serializers
+from category_app.serializers import CategoryCreateUpdateSerializer
 
 
 class GHLAuthCredentialsSerializer(serializers.ModelSerializer):
+    category = CategoryCreateUpdateSerializer(read_only=True)
+
     class Meta:
         model = GHLAuthCredentials
         fields = [
