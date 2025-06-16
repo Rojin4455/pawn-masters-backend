@@ -4,17 +4,25 @@ from rest_framework import serializers
 from decimal import Decimal
 from rest_framework import serializers
 from category_app.serializers import CategoryCreateUpdateSerializer
+from category_app.models import Category
 
 
 class GHLAuthCredentialsSerializer(serializers.ModelSerializer):
     category = CategoryCreateUpdateSerializer(read_only=True)
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(),
+        source='category',
+        write_only=True,
+        required=False,  # <-- Make it optional
+        allow_null=True 
+    )
 
     class Meta:
         model = GHLAuthCredentials
         fields = [
             'id',
             'company_id', 'location_id', 'location_name', 'company_name', 'is_approved',
-            'category', 'inbound_rate', 'outbound_rate'
+            'category', 'inbound_rate', 'outbound_rate', 'category_id'
         ]
 
 

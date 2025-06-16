@@ -27,7 +27,7 @@ class CategorySerializer(serializers.ModelSerializer):
 class CategoryCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
-        fields = ['category_name', 'description', 'color', 'is_active']
+        fields = ['category_name', 'description', 'color', 'is_active','id']
     
     def validate_color(self, value):
         """Validate that color is a valid hex color code"""

@@ -7,7 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import (
     Sum, Count, Q, F, Case, When, IntegerField, 
-    DecimalField, OuterRef, Subquery
+    DecimalField, OuterRef, Subquery, Min, Value
 )
 from django.db.models.functions import Coalesce
 from decimal import Decimal
@@ -138,29 +138,16 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         """
         base_queryset = self.get_base_queryset(filters)
         
-        # Pre-calculate location-level data for usage calculations
-        location_usage_subquery = base_queryset.values(
-            'conversation__location__company_id',
-            'conversation__location__location_id',
-            'conversation__location__inbound_rate',
-            'conversation__location__outbound_rate',
-        ).annotate(
-            location_inbound_messages=Coalesce(
-                Count('id', filter=Q(direction='inbound')), 0
-            ),
-            location_outbound_messages=Coalesce(
-                Count('id', filter=Q(direction='outbound')), 0
-            ),
-        ).annotate(
-            location_inbound_usage=F('conversation__location__inbound_rate') * F('location_inbound_messages'),
-            location_outbound_usage=F('conversation__location__outbound_rate') * F('location_outbound_messages'),
-        )
-        
-        # Aggregate by company
+        # Group by company_id only (not company_name) to avoid duplicates
         company_stats = base_queryset.values(
             'conversation__location__company_id',
-            'conversation__location__company_name',
         ).annotate(
+            # Get the first non-null company name for each company_id
+            company_name=Coalesce(
+                Min('conversation__location__company_name', 
+                    filter=Q(conversation__location__company_name__isnull=False)),
+                Value('Unknown Company')
+            ),
             # Segment aggregations
             total_inbound_segments=Coalesce(
                 Sum('segments', filter=Q(direction='inbound')), 0
@@ -177,29 +164,42 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             ),
             # Location count
             locations_count=Count('conversation__location__location_id', distinct=True),
-        ).order_by('conversation__location__company_name')
+        ).order_by('company_name')
 
         # Calculate usage costs per company
         results = []
         for company in company_stats:
             company_id = company['conversation__location__company_id']
             
-            # Calculate total usage for this company
-            company_locations = location_usage_subquery.filter(
+            # Get all locations for this company to calculate total usage
+            company_locations = base_queryset.filter(
                 conversation__location__company_id=company_id
-            )
+            ).values(
+                'conversation__location__location_id',
+                'conversation__location__inbound_rate',
+                'conversation__location__outbound_rate',
+            ).annotate(
+                location_inbound_messages=Coalesce(
+                    Count('id', filter=Q(direction='inbound')), 0
+                ),
+                location_outbound_messages=Coalesce(
+                    Count('id', filter=Q(direction='outbound')), 0
+                ),
+            ).distinct()
             
-            total_inbound_usage = sum(
-                (loc.get('location_inbound_usage') or Decimal('0.00')) 
-                for loc in company_locations
-            )
-            total_outbound_usage = sum(
-                (loc.get('location_outbound_usage') or Decimal('0.00')) 
-                for loc in company_locations
-            )
+            # Calculate total usage for this company
+            total_inbound_usage = Decimal('0.00')
+            total_outbound_usage = Decimal('0.00')
+            
+            for location in company_locations:
+                inbound_rate = location['conversation__location__inbound_rate'] or Decimal('0.00')
+                outbound_rate = location['conversation__location__outbound_rate'] or Decimal('0.00')
+                
+                total_inbound_usage += inbound_rate * location['location_inbound_messages']
+                total_outbound_usage += outbound_rate * location['location_outbound_messages']
             
             results.append({
-                'company_name': company['conversation__location__company_name'],
+                'company_name': company['company_name'],
                 'company_id': company_id,
                 'total_inbound_segments': company['total_inbound_segments'],
                 'total_outbound_segments': company['total_outbound_segments'],
