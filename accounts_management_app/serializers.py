@@ -26,7 +26,10 @@ class GHLAuthCredentialsSerializer(serializers.ModelSerializer):
         ]
 
 
-
+class CompanyNameSearchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GHLAuthCredentials
+        fields = ['id', 'company_name', 'company_id']
 
 
 class AccountViewSerializer(serializers.Serializer):

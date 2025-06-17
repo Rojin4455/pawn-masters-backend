@@ -1,6 +1,6 @@
 from rest_framework import generics, permissions
 from core.models import GHLAuthCredentials,SMSDefaultConfiguration
-from .serializers import GHLAuthCredentialsSerializer
+from .serializers import GHLAuthCredentialsSerializer, CompanyNameSearchSerializer
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -27,9 +27,21 @@ from django.db import models
 
 
 class GHLAuthCredentialsListView(generics.ListAPIView):
-    queryset = GHLAuthCredentials.objects.all()
     serializer_class = GHLAuthCredentialsSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = GHLAuthCredentials.objects.all()
+        search_term = self.request.query_params.get('search')
+        if search_term:
+            return queryset.filter(company_name__icontains=search_term)
+        return queryset
+    
+    def get_serializer_class(self):
+        # Use a lightweight serializer if search is present
+        if self.request.query_params.get('search'):
+            return CompanyNameSearchSerializer
+        return GHLAuthCredentialsSerializer
 
 
 class GHLAuthCredentialsDetailUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
