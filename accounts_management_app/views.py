@@ -31,11 +31,16 @@ class GHLAuthCredentialsListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        queryset = GHLAuthCredentials.objects.all()
         search_term = self.request.query_params.get('search')
         if search_term:
-            return queryset.filter(company_name__icontains=search_term)
-        return queryset
+            return (
+                GHLAuthCredentials.objects
+                .filter(company_name__icontains=search_term)
+                .values('company_name', 'company_id')
+                .distinct()
+            )
+        else:
+            return GHLAuthCredentials.objects.all()
     
     def get_serializer_class(self):
         # Use a lightweight serializer if search is present
