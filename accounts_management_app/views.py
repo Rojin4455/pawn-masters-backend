@@ -21,6 +21,13 @@ from django.db import transaction
 from .serializers import SMSDefaultConfigurationSerializer, GHLCredentialsUpdateSerializer
 from django.db import models
 
+import json
+from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from accounts_management_app.models import WebhookLog
+from accounts_management_app.tasks import handle_webhook_event
+
 
 
 
@@ -472,3 +479,20 @@ class SMSConfigurationViewSet(viewsets.GenericViewSet):
                 {'error': f'Failed to fetch locations with defaults: {str(e)}'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+        
+
+
+@csrf_exempt
+def webhook_handler(request):
+    if request.method != "POST":
+        return JsonResponse({"message": "Method not allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        print("date:----- ", data)
+        WebhookLog.objects.create(data=data)
+        event_type = data.get("type")
+        handle_webhook_event.delay(data, event_type)
+        return JsonResponse({"message":"Webhook received"}, status=200)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)

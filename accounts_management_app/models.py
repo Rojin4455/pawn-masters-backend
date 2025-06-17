@@ -110,3 +110,13 @@ class TextMessage(models.Model):
 
 
 
+
+
+
+class WebhookLog(models.Model):
+    received_at = models.DateTimeField(auto_now_add=True)
+    data = models.TextField(null=True, blank=True)
+    webhook_id = models.CharField(null=True, blank=True, max_length=200)
+
+    def __str__(self):
+        return f"{self.webhook_id} : {self.received_at}"
