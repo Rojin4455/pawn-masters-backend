@@ -240,7 +240,9 @@ def create_sms_from_webhook(data, conversation, location_tz):
         
         # Calculate message segments
         body = data.get("body", "")
-        body_length = len(body)
+        # Treat '\n' as a single character (like actual SMS behavior)
+        normalized_body = body.replace('\n', ' ')  # or just ''.replace('\n', '') to remove it
+        body_length = len(normalized_body)
         segments = math.ceil(body_length / 160) if body_length > 0 else 1
         
         # Create the message
