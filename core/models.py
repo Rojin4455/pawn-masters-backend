@@ -35,7 +35,7 @@ class GHLAuthCredentials(models.Model):
 
     def save(self, *args, **kwargs):
         """Auto-populate rates and currency from default config if not provided"""
-        if not self.inbound_rate or not self.outbound_rate or not self.currency or not self.is_contact_pulled:
+        if not self.inbound_rate or not self.outbound_rate or not self.currency or not self.outbound_call_rate or not self.inbound_call_rate:
             default_config = SMSDefaultConfiguration.get_instance()
             
             if not self.inbound_rate:
@@ -44,6 +44,10 @@ class GHLAuthCredentials(models.Model):
                 self.outbound_rate = default_config.default_outbound_rate
             if not self.currency:
                 self.currency = default_config.default_currency
+            if not self.outbound_call_rate:
+                self.outbound_call_rate = default_config.default_call_outbound_rate
+            if not self.inbound_call_rate:
+                self.inbound_call_rate = default_config.default_call_inbound_rate
                 
         super().save(*args, **kwargs)
     

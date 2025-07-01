@@ -385,12 +385,7 @@ class SMSConfigurationViewSet(viewsets.GenericViewSet):
     def _apply_defaults_to_existing_records(self, config):
         """Apply new default values to existing GHL credentials that have default values"""
         # Get current default rates before the update
-        credentials_to_update = GHLAuthCredentials.objects.filter(
-            models.Q(inbound_rate__isnull=True) | 
-            models.Q(outbound_rate__isnull=True) | 
-            models.Q(currency__isnull=True) |
-            models.Q(currency='')
-        )
+        credentials_to_update = GHLAuthCredentials.objects.all()
         
         # Update records with new defaults
         update_count = 0
