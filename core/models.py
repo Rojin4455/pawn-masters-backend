@@ -66,6 +66,17 @@ class SMSDefaultConfiguration(models.Model):
         default=Decimal('0.10'),
         help_text="Default outbound rate in USD, e.g., 0.10 for 10 cents"
     )
+    default_call_inbound_rate = models.DecimalField(
+        max_digits=10, decimal_places=7, 
+        default=Decimal('0.10'),
+        help_text="Default inbound rate in USD, e.g., 0.10 for 10 cents"
+    )
+    default_call_outbound_rate = models.DecimalField(
+        max_digits=10, 
+        decimal_places=7, 
+        default=Decimal('0.10'),
+        help_text="Default outbound rate in USD, e.g., 0.10 for 10 cents"
+    )
     default_currency = models.CharField(
         max_length=10, 
         default='USD',

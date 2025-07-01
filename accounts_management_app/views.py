@@ -402,6 +402,12 @@ class SMSConfigurationViewSet(viewsets.GenericViewSet):
             if not credential.outbound_rate:
                 credential.outbound_rate = config.default_outbound_rate
                 updated = True
+            if not credential.inbound_call_rate:
+                credential.inbound_call_rate = config.default_call_inbound_rate
+                updated = True
+            if not credential.outbound_call_rate:
+                credential.outbound_call_rate = config.default_call_outbound_rate
+                updated = True
             if not credential.currency:
                 credential.currency = config.default_currency
                 updated = True
@@ -442,6 +448,8 @@ class SMSConfigurationViewSet(viewsets.GenericViewSet):
                     update_data.update({
                         'inbound_rate': config.default_inbound_rate,
                         'outbound_rate': config.default_outbound_rate,
+                        'inbound_call_rate': config.default_inbound_rate,
+                        'outbound_call_rate': config.default_outbound_rate,
                         'currency': config.default_currency
                     })
                 
@@ -472,7 +480,7 @@ class SMSConfigurationViewSet(viewsets.GenericViewSet):
                 models.Q(currency=config.default_currency)
             ).values(
                 'location_id', 'location_name', 'company_name',
-                'inbound_rate', 'outbound_rate', 'currency'
+                'inbound_rate', 'outbound_rate', 'currency','inbound_call_rate','outbound_call_rate'
             )
             
             return Response({

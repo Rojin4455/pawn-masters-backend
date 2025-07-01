@@ -99,6 +99,8 @@ class SMSDefaultConfigurationSerializer(serializers.ModelSerializer):
         fields = [
             'default_inbound_rate', 
             'default_outbound_rate', 
+            'default_call_inbound_rate',
+            'default_call_outbound_rate',
             'default_currency',
             'created_at',
             'updated_at'
