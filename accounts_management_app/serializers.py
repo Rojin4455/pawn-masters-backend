@@ -118,6 +118,19 @@ class SMSDefaultConfigurationSerializer(serializers.ModelSerializer):
         if value <= 0:
             raise serializers.ValidationError("Outbound rate must be greater than 0")
         return value
+    
+
+    def validate_default_call_inbound_rate(self, value):
+        """Validate inbound rate is positive"""
+        if value <= 0:
+            raise serializers.ValidationError("Inbound rate must be greater than 0")
+        return value
+
+    def validate_default_call_outbound_rate(self, value):
+        """Validate outbound rate is positive"""
+        if value <= 0:
+            raise serializers.ValidationError("Outbound rate must be greater than 0")
+        return value
 
     def validate_default_currency(self, value):
         """Validate currency code format"""
