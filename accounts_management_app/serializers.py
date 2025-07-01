@@ -45,6 +45,7 @@ class AccountViewSerializer(serializers.Serializer):
     total_outbound_usage = serializers.DecimalField(max_digits=10, decimal_places=2)
     inbound_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     outbound_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
+    total_usage = serializers.DecimalField(max_digits=10, decimal_places=2)
 
 
 class CompanyViewSerializer(serializers.Serializer):
@@ -57,6 +58,7 @@ class CompanyViewSerializer(serializers.Serializer):
     total_outbound_messages = serializers.IntegerField()
     total_inbound_usage = serializers.DecimalField(max_digits=10, decimal_places=2)
     total_outbound_usage = serializers.DecimalField(max_digits=10, decimal_places=2)
+    total_usage = serializers.DecimalField(max_digits=10, decimal_places=2)
     locations_count = serializers.IntegerField()
 
 

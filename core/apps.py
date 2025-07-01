@@ -7,4 +7,4 @@ class CoreConfig(AppConfig):
 
 
     def ready(self):
-        import core.signals  # Replace with your actual app name
+        import core.signals

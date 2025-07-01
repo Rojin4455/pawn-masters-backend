@@ -152,8 +152,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 'total_outbound_usage': outbound_usage,
                 'inbound_rate': inbound_rate,
                 'outbound_rate': outbound_rate,
+                'total_usage': inbound_usage + outbound_usage,  # ✅ Corrected line
             })
-            
+
+
         return results
 
     def get_company_view_data(self, filters):
@@ -214,14 +216,16 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             # Calculate total usage for this company
             total_inbound_usage = Decimal('0.00')
             total_outbound_usage = Decimal('0.00')
-            
+
             for location in company_locations:
-                inbound_rate = location['conversation__location__inbound_rate'] or Decimal('0.00')
-                outbound_rate = location['conversation__location__outbound_rate'] or Decimal('0.00')
-                
-                total_inbound_usage += inbound_rate * location['location_inbound_messages']
-                total_outbound_usage += outbound_rate * location['location_outbound_messages']
-            
+                inbound_rate = location.get('conversation__location__inbound_rate') or Decimal('0.00')
+                outbound_rate = location.get('conversation__location__outbound_rate') or Decimal('0.00')
+
+                total_inbound_usage += inbound_rate * location.get('location_inbound_messages', 0)
+                total_outbound_usage += outbound_rate * location.get('location_outbound_messages', 0)
+
+            total_usage = total_inbound_usage + total_outbound_usage
+
             results.append({
                 'company_name': company['company_name'],
                 'company_id': company_id,
@@ -232,6 +236,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 'total_inbound_usage': total_inbound_usage,
                 'total_outbound_usage': total_outbound_usage,
                 'locations_count': company['locations_count'],
+                'total_usage': total_usage
             })
             
         return results
@@ -308,6 +313,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 'total_inbound_segments': total_stats['total_inbound_segments'] or 0,
                 'total_outbound_segments': total_stats['total_outbound_segments'] or 0,
             }
+
+            
             
             return Response(summary, status=status.HTTP_200_OK)
             
