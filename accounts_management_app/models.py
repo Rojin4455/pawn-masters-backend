@@ -105,6 +105,77 @@ class TextMessage(models.Model):
     
     def __str__(self):
         return f"Message {self.message_id} - {self.message_type} ({self.direction}) - {self.segments} segments"
+    
+
+
+
+class CallRecord(models.Model):
+    
+    DIRECTION_CHOICES = [
+        ('inbound', 'Inbound'),
+        ('outbound', 'Outbound'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('no-answer', 'No Answer'),
+        ('busy', 'Busy'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    # Primary identifiers
+    message_id = models.CharField(max_length=255, unique=True, db_index=True)
+    conversation = models.ForeignKey('GHLConversation', on_delete=models.CASCADE, related_name='call_records')
+    alt_id = models.CharField(max_length=255, blank=True, null=True, help_text="Alternative ID from GHL")
+    
+    # Call specific fields
+    message_type = models.CharField(max_length=50, default='TYPE_CALL')
+    direction = models.CharField(max_length=20, choices=DIRECTION_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, blank=True, null=True)
+    type = models.IntegerField(help_text="Message type ID from API")
+    
+    # Call duration and metadata
+    duration = models.IntegerField(default=0, help_text="Call duration in seconds")
+    duration_formatted = models.CharField(max_length=20, blank=True, null=True, help_text="Formatted duration (MM:SS)")
+    
+    # Call metadata (stored as JSON for flexibility)
+    call_meta = models.JSONField(default=dict, blank=True, help_text="Additional call metadata from API")
+    
+    # Location and contact info
+    location_id = models.CharField(max_length=255, blank=True, null=True)
+    contact_id = models.CharField(max_length=255, blank=True, null=True)
+    
+    # User info
+    user_id = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Timestamps
+    date_added = models.DateTimeField(null=True, blank=True)
+    date_updated = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = "call_record"
+        ordering = ['-date_added']
+        indexes = [
+            models.Index(fields=['conversation', 'date_added']),
+            models.Index(fields=['duration', 'date_added']),
+            models.Index(fields=['status', 'date_added']),
+            models.Index(fields=['direction', 'date_added']),
+        ]
+    
+    def save(self, *args, **kwargs):
+        # Auto-format duration as MM:SS
+        if self.duration:
+            minutes = self.duration // 60
+            seconds = self.duration % 60
+            self.duration_formatted = f"{minutes:02d}:{seconds:02d}"
+        super().save(*args, **kwargs)
+    
+    def __str__(self):
+        return f"Call {self.message_id} - {self.direction} - {self.duration_formatted or '00:00'} - {self.status}"
+
 
 
 

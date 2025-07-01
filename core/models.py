@@ -21,11 +21,14 @@ class GHLAuthCredentials(models.Model):
     timezone = models.CharField(max_length=100, null=True, blank=True, default="")
     is_approved = models.BooleanField(default=False)
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='locations')
-    inbound_rate = models.DecimalField(max_digits=5, decimal_places=2, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)    
-    outbound_rate = models.DecimalField(max_digits=5, decimal_places=2, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)
+    inbound_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)    
+    outbound_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)
+    inbound_call_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)    
+    outbound_call_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)
     currency = models.CharField(max_length=255, null=True, blank=True)
     is_contact_pulled = models.BooleanField(null=True, blank=True, default=False)
     is_conversation_pulled = models.BooleanField(null=True, blank=True, default=False)
+    is_calls_pulled = models.BooleanField(null=True, blank=True, default=False)
     segment_length = models.IntegerField(default=160, null=True, blank=True)
 
 

@@ -22,7 +22,7 @@ class GHLAuthCredentialsSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'company_id', 'location_id', 'location_name', 'company_name', 'is_approved',
-            'category', 'inbound_rate', 'outbound_rate', 'category_id'
+            'category', 'inbound_rate', 'outbound_rate', 'category_id','outbound_call_rate','inbound_call_rate'
         ]
 
 

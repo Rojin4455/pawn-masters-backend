@@ -30,6 +30,10 @@ def trigger_on_approval(sender, instance, **kwargs):
             tasks_to_run.append(async_sync_conversations_with_messages.si(instance.location_id, instance.access_token))
             instance.is_conversation_pulled = True
 
+        if not instance.is_calls_pulled:
+            tasks_to_run.append(async_sync_conversations_with_messages.si(instance.location_id, instance.access_token))
+            instance.is_conversation_pulled = True
+
         if tasks_to_run:
             chain(*tasks_to_run).delay()
             instance.save()
