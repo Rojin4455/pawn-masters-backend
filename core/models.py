@@ -25,6 +25,7 @@ class GHLAuthCredentials(models.Model):
     outbound_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)
     inbound_call_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)    
     outbound_call_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)
+    call_price_ratio = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)
     currency = models.CharField(max_length=255, null=True, blank=True)
     is_contact_pulled = models.BooleanField(null=True, blank=True, default=False)
     is_conversation_pulled = models.BooleanField(null=True, blank=True, default=False)
@@ -34,7 +35,7 @@ class GHLAuthCredentials(models.Model):
 
     def save(self, *args, **kwargs):
         """Auto-populate rates and currency from default config if not provided"""
-        if not self.inbound_rate or not self.outbound_rate or not self.currency:
+        if not self.inbound_rate or not self.outbound_rate or not self.currency or not self.is_contact_pulled:
             default_config = SMSDefaultConfiguration.get_instance()
             
             if not self.inbound_rate:
