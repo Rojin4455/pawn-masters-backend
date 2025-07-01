@@ -53,14 +53,13 @@ class SMSDefaultConfiguration(models.Model):
     Singleton model to store default SMS configuration for the entire application
     """
     default_inbound_rate = models.DecimalField(
-        max_digits=5, 
-        decimal_places=2, 
+        max_digits=10, decimal_places=7, 
         default=Decimal('0.10'),
         help_text="Default inbound rate in USD, e.g., 0.10 for 10 cents"
     )
     default_outbound_rate = models.DecimalField(
-        max_digits=5, 
-        decimal_places=2, 
+        max_digits=10, 
+        decimal_places=7, 
         default=Decimal('0.10'),
         help_text="Default outbound rate in USD, e.g., 0.10 for 10 cents"
     )

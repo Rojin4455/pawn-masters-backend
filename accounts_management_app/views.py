@@ -279,7 +279,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             
         except Exception as e:
             return Response(
-                {'error': f'Failed to fetch analytics data: {str(e)}'}, 
+                {'error': f'Failed to fetch analytics data: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
