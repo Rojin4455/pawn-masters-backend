@@ -391,21 +391,21 @@ class SMSConfigurationViewSet(viewsets.GenericViewSet):
         update_count = 0
         for credential in credentials_to_update:
             updated = False
-            if not credential.inbound_rate:
-                credential.inbound_rate = config.default_inbound_rate
-                updated = True
-            if not credential.outbound_rate:
-                credential.outbound_rate = config.default_outbound_rate
-                updated = True
-            if not credential.inbound_call_rate:
-                credential.inbound_call_rate = config.default_call_inbound_rate
-                updated = True
-            if not credential.outbound_call_rate:
-                credential.outbound_call_rate = config.default_call_outbound_rate
-                updated = True
-            if not credential.currency:
-                credential.currency = config.default_currency
-                updated = True
+            # if not credential.inbound_rate:
+            credential.inbound_rate = config.default_inbound_rate
+            updated = True
+            # if not credential.outbound_rate:
+            credential.outbound_rate = config.default_outbound_rate
+                # updated = True
+            # if not credential.inbound_call_rate:
+            credential.inbound_call_rate = config.default_call_inbound_rate
+                # updated = True
+            # if not credential.outbound_call_rate:
+            credential.outbound_call_rate = config.default_call_outbound_rate
+                # updated = True
+            # if not credential.currency:
+            credential.currency = config.default_currency
+                # updated = True
             
             if updated:
                 credential.save()
