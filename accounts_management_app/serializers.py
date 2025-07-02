@@ -152,7 +152,6 @@ class AccountViewWithCallsSerializer(serializers.Serializer):
     company_name = serializers.CharField()
     location_name = serializers.CharField()
     location_id = serializers.CharField()
-
     sms_data = serializers.SerializerMethodField()
     call_data = serializers.SerializerMethodField()
     combined_totals = serializers.SerializerMethodField()
@@ -163,13 +162,11 @@ class AccountViewWithCallsSerializer(serializers.Serializer):
             "total_outbound_segments": obj["total_outbound_segments"],
             "total_inbound_messages": obj["total_inbound_messages"],
             "total_outbound_messages": obj["total_outbound_messages"],
-            "sms_inbound_usage": obj["sms_inbound_usage"],
-            "sms_outbound_usage": obj["sms_outbound_usage"],
-            "sms_inbound_rate": obj["sms_inbound_rate"],
-            "sms_outbound_rate": obj["sms_outbound_rate"],
-            # "total_inbound_sms_usage": obj["total_inbound_usage"],
-            # "total_outbound_sms_usage": obj["total_outbound_usage"],
-            "total_sms_usage": obj["total_usage"]
+            "sms_inbound_usage": round(float(obj["sms_inbound_usage"]), 3),
+            "sms_outbound_usage": round(float(obj["sms_outbound_usage"]), 3),
+            "sms_inbound_rate": round(float(obj["sms_inbound_rate"]), 7), # Rate precision
+            "sms_outbound_rate": round(float(obj["sms_outbound_rate"]), 7), # Rate precision
+            "total_sms_usage": round(float(obj["total_sms_usage"]), 3)
         }
 
     def get_call_data(self, obj):
@@ -178,27 +175,25 @@ class AccountViewWithCallsSerializer(serializers.Serializer):
             "total_outbound_calls": obj["total_outbound_calls"],
             "total_inbound_call_duration": obj["total_inbound_call_duration"],
             "total_outbound_call_duration": obj["total_outbound_call_duration"],
-            "inbound_call_minutes": obj["inbound_call_minutes"],
-            "outbound_call_minutes": obj["outbound_call_minutes"],
-            "call_inbound_usage": obj["call_inbound_usage"],
-            "call_outbound_usage": obj["call_outbound_usage"],
-            "call_inbound_rate": obj["call_inbound_rate"],
-            "call_outbound_rate": obj["call_outbound_rate"]
+            "total_inbound_call_minutes": round(float(obj["inbound_call_minutes"]), 2),
+            "total_outbound_call_minutes": round(float(obj["outbound_call_minutes"]), 2),
+            "call_inbound_usage": round(float(obj["call_inbound_usage"]), 3),
+            "call_outbound_usage": round(float(obj["call_outbound_usage"]), 3),
+            "call_inbound_rate": round(float(obj["call_inbound_rate"]), 7), # Rate precision
+            "call_outbound_rate": round(float(obj["call_outbound_rate"]), 7), # Rate precision
+            "total_call_usage": round(float(obj["total_call_usage"]), 3)
         }
 
     def get_combined_totals(self, obj):
         return {
-            "total_inbound_usage": obj["total_inbound_usage"],
-            "total_outbound_usage": obj["total_outbound_usage"],
-            "total_usage": obj["total_usage"]
+            "total_inbound_usage": round(float(obj["total_inbound_usage"]), 3),
+            "total_outbound_usage": round(float(obj["total_outbound_usage"]), 3),
+            "total_usage": round(float(obj["total_usage"]), 3)
         }
-
-
 
 class CompanyViewWithCallsSerializer(serializers.Serializer):
     company_name = serializers.CharField()
     company_id = serializers.CharField()
-
     sms_data = serializers.SerializerMethodField()
     call_data = serializers.SerializerMethodField()
     combined_totals = serializers.SerializerMethodField()
@@ -209,8 +204,8 @@ class CompanyViewWithCallsSerializer(serializers.Serializer):
             "total_outbound_segments": obj["total_outbound_segments"],
             "total_inbound_messages": obj["total_inbound_messages"],
             "total_outbound_messages": obj["total_outbound_messages"],
-            "sms_inbound_usage": obj["sms_inbound_usage"],
-            "sms_outbound_usage": obj["sms_outbound_usage"]
+            "sms_inbound_usage": round(float(obj["sms_inbound_usage"]), 3),
+            "sms_outbound_usage": round(float(obj["sms_outbound_usage"]), 3)
         }
 
     def get_call_data(self, obj):
@@ -219,16 +214,16 @@ class CompanyViewWithCallsSerializer(serializers.Serializer):
             "total_outbound_calls": obj["total_outbound_calls"],
             "total_inbound_call_duration": obj["total_inbound_call_duration"],
             "total_outbound_call_duration": obj["total_outbound_call_duration"],
-            "total_inbound_call_minutes": obj["total_inbound_call_minutes"],
-            "total_outbound_call_minutes": obj["total_outbound_call_minutes"],
-            "call_inbound_usage": obj["call_inbound_usage"],
-            "call_outbound_usage": obj["call_outbound_usage"]
+            "total_inbound_call_minutes": round(float(obj["total_inbound_call_minutes"]), 2),
+            "total_outbound_call_minutes": round(float(obj["total_outbound_call_minutes"]), 2),
+            "call_inbound_usage": round(float(obj["call_inbound_usage"]), 3),
+            "call_outbound_usage": round(float(obj["call_outbound_usage"]), 3)
         }
 
     def get_combined_totals(self, obj):
         return {
-            "total_inbound_usage": obj["total_inbound_usage"],
-            "total_outbound_usage": obj["total_outbound_usage"],
-            "total_usage": obj["total_usage"],
+            "total_inbound_usage": round(float(obj["total_inbound_usage"]), 3),
+            "total_outbound_usage": round(float(obj["total_outbound_usage"]), 3),
+            "total_usage": round(float(obj["total_usage"]), 3),
             "locations_count": obj["locations_count"]
         }

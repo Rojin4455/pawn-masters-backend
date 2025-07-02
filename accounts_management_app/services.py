@@ -335,7 +335,11 @@ def sync_conversation_text_messages(conversation_id, location_id, access_token):
 
 
 
-def sync_conversations_with_messages(location_id, access_token):
+def sync_conversations_with_messages(location_id):
+
+    
+    token = GHLAuthCredentials.objects.get(location_id=location_id)
+    access_token = token.access_token
     """
     Enhanced version of sync_conversations that also syncs messages for each conversation
     """
@@ -543,7 +547,7 @@ def sync_conversations_with_messages(location_id, access_token):
                 print(f"Fallback also failed: {fallback_e}")
                 return
             
-    save_conversations_with_messges(location_id, access_token)
+    # save_conversations_with_messges(location_id, access_token)
     
 
 
@@ -625,7 +629,7 @@ def sync_conversation_calls(conversation_id, location_id, access_token):
             alt_id=msg.get("altId", ""),
             message_type=msg.get("messageType", "TYPE_CALL"),
             direction=msg.get("direction", ""),
-            status=msg.get("status", ""),
+            status=msg.get("meta", {}).get("status") if msg.get("meta", {}).get("status", "") else msg.get("status", ""),
             type=msg.get("type", 0),
             duration=duration,
             call_meta=msg.get("meta", {}),
@@ -704,7 +708,10 @@ def sync_conversation_calls(conversation_id, location_id, access_token):
     return len(all_calls)
 
 
-def save_conversations_with_calls(location_id, access_token):
+def save_conversations_with_calls(location_id):
+
+    token = GHLAuthCredentials.objects.get(location_id=location_id)
+    access_token=token.access_token
     """
     Main function to sync call records for all conversations.
     """
@@ -738,7 +745,10 @@ def save_conversations_with_calls(location_id, access_token):
 
 
 
-def save_conversations_with_messages_and_calls(location_id, access_token):
+def save_conversations_with_messages_and_calls(location_id):
+
+    token = GHLAuthCredentials.objects.get(location_id=location_id)
+    access_token=token.access_token
     """
     Combined function to sync both text messages and call records.
     """

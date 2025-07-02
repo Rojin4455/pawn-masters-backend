@@ -130,7 +130,7 @@ class CallRecord(models.Model):
     type = models.IntegerField(help_text="Message type ID from API")
     
     # Call duration and metadata
-    duration = models.IntegerField(default=0, help_text="Call duration in seconds")
+    duration = models.IntegerField(default=0, help_text="Call duration in seconds", null=True, blank=True)
     duration_formatted = models.CharField(max_length=20, blank=True, null=True, help_text="Formatted duration (MM:SS)")
     
     # Call metadata (stored as JSON for flexibility)

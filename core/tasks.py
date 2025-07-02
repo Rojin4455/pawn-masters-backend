@@ -46,7 +46,7 @@ def async_fetch_all_contacts(location_id, access_token):
 
 @shared_task
 def async_sync_conversations_with_messages(location_id, access_token):
-    sync_conversations_with_messages(location_id, access_token)
+    sync_conversations_with_messages(location_id)
 
 @shared_task
 def async_sync_conversations_with_calls(location_id, access_token):
