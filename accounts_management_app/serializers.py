@@ -145,3 +145,90 @@ class GHLCredentialsUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = GHLAuthCredentials
         fields = ['inbound_rate', 'outbound_rate', 'currency']
+
+
+
+class AccountViewWithCallsSerializer(serializers.Serializer):
+    company_name = serializers.CharField()
+    location_name = serializers.CharField()
+    location_id = serializers.CharField()
+
+    sms_data = serializers.SerializerMethodField()
+    call_data = serializers.SerializerMethodField()
+    combined_totals = serializers.SerializerMethodField()
+
+    def get_sms_data(self, obj):
+        return {
+            "total_inbound_segments": obj["total_inbound_segments"],
+            "total_outbound_segments": obj["total_outbound_segments"],
+            "total_inbound_messages": obj["total_inbound_messages"],
+            "total_outbound_messages": obj["total_outbound_messages"],
+            "sms_inbound_usage": obj["sms_inbound_usage"],
+            "sms_outbound_usage": obj["sms_outbound_usage"],
+            "sms_inbound_rate": obj["sms_inbound_rate"],
+            "sms_outbound_rate": obj["sms_outbound_rate"],
+            # "total_inbound_sms_usage": obj["total_inbound_usage"],
+            # "total_outbound_sms_usage": obj["total_outbound_usage"],
+            "total_sms_usage": obj["total_usage"]
+        }
+
+    def get_call_data(self, obj):
+        return {
+            "total_inbound_calls": obj["total_inbound_calls"],
+            "total_outbound_calls": obj["total_outbound_calls"],
+            "total_inbound_call_duration": obj["total_inbound_call_duration"],
+            "total_outbound_call_duration": obj["total_outbound_call_duration"],
+            "inbound_call_minutes": obj["inbound_call_minutes"],
+            "outbound_call_minutes": obj["outbound_call_minutes"],
+            "call_inbound_usage": obj["call_inbound_usage"],
+            "call_outbound_usage": obj["call_outbound_usage"],
+            "call_inbound_rate": obj["call_inbound_rate"],
+            "call_outbound_rate": obj["call_outbound_rate"]
+        }
+
+    def get_combined_totals(self, obj):
+        return {
+            "total_inbound_usage": obj["total_inbound_usage"],
+            "total_outbound_usage": obj["total_outbound_usage"],
+            "total_usage": obj["total_usage"]
+        }
+
+
+
+class CompanyViewWithCallsSerializer(serializers.Serializer):
+    company_name = serializers.CharField()
+    company_id = serializers.CharField()
+
+    sms_data = serializers.SerializerMethodField()
+    call_data = serializers.SerializerMethodField()
+    combined_totals = serializers.SerializerMethodField()
+
+    def get_sms_data(self, obj):
+        return {
+            "total_inbound_segments": obj["total_inbound_segments"],
+            "total_outbound_segments": obj["total_outbound_segments"],
+            "total_inbound_messages": obj["total_inbound_messages"],
+            "total_outbound_messages": obj["total_outbound_messages"],
+            "sms_inbound_usage": obj["sms_inbound_usage"],
+            "sms_outbound_usage": obj["sms_outbound_usage"]
+        }
+
+    def get_call_data(self, obj):
+        return {
+            "total_inbound_calls": obj["total_inbound_calls"],
+            "total_outbound_calls": obj["total_outbound_calls"],
+            "total_inbound_call_duration": obj["total_inbound_call_duration"],
+            "total_outbound_call_duration": obj["total_outbound_call_duration"],
+            "total_inbound_call_minutes": obj["total_inbound_call_minutes"],
+            "total_outbound_call_minutes": obj["total_outbound_call_minutes"],
+            "call_inbound_usage": obj["call_inbound_usage"],
+            "call_outbound_usage": obj["call_outbound_usage"]
+        }
+
+    def get_combined_totals(self, obj):
+        return {
+            "total_inbound_usage": obj["total_inbound_usage"],
+            "total_outbound_usage": obj["total_outbound_usage"],
+            "total_usage": obj["total_usage"],
+            "locations_count": obj["locations_count"]
+        }

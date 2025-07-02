@@ -116,14 +116,7 @@ class CallRecord(models.Model):
         ('outbound', 'Outbound'),
     ]
     
-    STATUS_CHOICES = [
-        ('pending', 'Pending'),
-        ('completed', 'Completed'),
-        ('failed', 'Failed'),
-        ('no-answer', 'No Answer'),
-        ('busy', 'Busy'),
-        ('cancelled', 'Cancelled'),
-    ]
+
     
     # Primary identifiers
     message_id = models.CharField(max_length=255, unique=True, db_index=True)
@@ -133,7 +126,7 @@ class CallRecord(models.Model):
     # Call specific fields
     message_type = models.CharField(max_length=50, default='TYPE_CALL')
     direction = models.CharField(max_length=20, choices=DIRECTION_CHOICES)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, blank=True, null=True)
+    status = models.CharField(max_length=20, blank=True, null=True)
     type = models.IntegerField(help_text="Message type ID from API")
     
     # Call duration and metadata
@@ -175,12 +168,6 @@ class CallRecord(models.Model):
     
     def __str__(self):
         return f"Call {self.message_id} - {self.direction} - {self.duration_formatted or '00:00'} - {self.status}"
-
-
-
-
-
-
 
 
 
