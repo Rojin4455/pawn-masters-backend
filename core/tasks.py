@@ -50,4 +50,4 @@ def async_sync_conversations_with_messages(location_id, access_token):
 
 @shared_task
 def async_sync_conversations_with_calls(location_id, access_token):
-    save_conversations_with_calls(location_id, access_token)
+    save_conversations_with_calls(location_id)
