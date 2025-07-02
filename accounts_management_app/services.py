@@ -646,6 +646,7 @@ def sync_conversation_calls(conversation_id, location_id, access_token):
     while True:
         page += 1
         params = {"lastMessageId": last_message_id} if last_message_id else {}
+        params["limit"] = 100
 
         print(f"Fetching call records page {page} for conversation {conversation_id}")
         res = requests.get(base_url, headers=headers, params=params)
@@ -662,8 +663,8 @@ def sync_conversation_calls(conversation_id, location_id, access_token):
         all_calls += [build_call_obj(msg) for msg in messages]
         last_message_id = messages[-1]["id"]
 
-        if not data.get("nextPage") or page > 100:
-            break
+        # if not data.get("nextPage") or page > 100:
+        #     break
 
     # Save to DB
     if not all_calls:
