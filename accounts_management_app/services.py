@@ -463,10 +463,10 @@ def sync_conversations_with_messages(location_id):
         if last_message_date:
             start_after_date = last_message_date
         
-        # Safety break
-        if page > 50:
-            print(f"Reached maximum page limit ({page}). Stopping to prevent infinite loop.")
-            break
+        # # Safety break
+        # if page > 50:
+        #     print(f"Reached maximum page limit ({page}). Stopping to prevent infinite loop.")
+        #     break
     
     # Save conversations to database
     if all_conversations:
