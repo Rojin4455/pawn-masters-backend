@@ -1,5 +1,5 @@
 from rest_framework import generics, permissions
-from core.models import GHLAuthCredentials,SMSDefaultConfiguration
+from core.models import GHLAuthCredentials,SMSDefaultConfiguration,CallReport
 from .serializers import GHLAuthCredentialsSerializer, CompanyNameSearchSerializer
 
 from rest_framework import viewsets, status
@@ -16,6 +16,7 @@ from .serializers import (
     AccountViewSerializer, CompanyViewSerializer, 
     AnalyticsRequestSerializer
 )
+
 
 from django.db import transaction
 from .serializers import SMSDefaultConfigurationSerializer, GHLCredentialsUpdateSerializer, CompanyViewWithCallsSerializer, AccountViewWithCallsSerializer
@@ -102,9 +103,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
 
     def get_base_calls_queryset(self, filters):
         """
-        Get base Calls queryset with applied filters
+        Get base Calls queryset with applied filters - Updated to use CallReport
         """
-        queryset = CallRecord.objects.select_related('conversation__location')
+        # Updated to use CallReport instead of CallRecord
+        queryset = CallReport.objects.select_related('ghl_credential')
 
         # Apply date range filter
         if filters.get('date_range'):
@@ -117,13 +119,13 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         # Apply category filter
         if filters.get('category'):
             queryset = queryset.filter(
-                conversation__location__category_id=filters['category']
+                ghl_credential__category_id=filters['category']
             )
 
         # Apply company filter
         if filters.get('company_id'):
             queryset = queryset.filter(
-                conversation__location__company_id=filters['company_id']
+                ghl_credential__company_id=filters['company_id']
             )
 
         return queryset
@@ -159,12 +161,12 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             ),
         ).order_by('conversation__location__company_name', 'conversation__location__location_name')
 
-        # Get Call stats per location and combine with GHLAuthCredentials for rates
+        # Get Call stats per location - Updated to use CallReport
         call_stats = calls_queryset.values(
-            'conversation__location__location_id',
-            'conversation__location__inbound_call_rate',
-            'conversation__location__outbound_call_rate',
-            'conversation__location__call_price_ratio',
+            'ghl_credential__location_id',
+            'ghl_credential__inbound_call_rate',
+            'ghl_credential__outbound_call_rate',
+            'ghl_credential__call_price_ratio',
         ).annotate(
             # Call aggregations - duration in seconds
             total_inbound_call_duration=Coalesce(
@@ -180,21 +182,20 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             total_outbound_calls=Coalesce(
                 Count('id', filter=Q(direction='outbound')), 0
             ),
-        ).order_by('conversation__location__location_id')
-
+        ).order_by('ghl_credential__location_id')
 
         # Create a dictionary for quick call stats lookup, also store rates and ratio
         call_stats_dict = {}
         for stat in call_stats:
-            location_id = stat['conversation__location__location_id']
+            location_id = stat['ghl_credential__location_id']
             call_stats_dict[location_id] = {
                 'total_inbound_call_duration': stat['total_inbound_call_duration'],
                 'total_outbound_call_duration': stat['total_outbound_call_duration'],
                 'total_inbound_calls': stat['total_inbound_calls'],
                 'total_outbound_calls': stat['total_outbound_calls'],
-                'inbound_call_rate': stat['conversation__location__inbound_call_rate'],
-                'outbound_call_rate': stat['conversation__location__outbound_call_rate'],
-                'call_price_ratio': stat['conversation__location__call_price_ratio'],
+                'inbound_call_rate': stat['ghl_credential__inbound_call_rate'],
+                'outbound_call_rate': stat['ghl_credential__outbound_call_rate'],
+                'call_price_ratio': stat['ghl_credential__call_price_ratio'],
             }
 
         results = []
@@ -233,7 +234,6 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             call_inbound_usage = call_inbound_rate_effective * inbound_call_minutes
             call_outbound_usage = call_outbound_rate_effective * outbound_call_minutes
             total_call_usage = call_inbound_usage + call_outbound_usage
-
 
             # Combined Totals
             total_inbound_usage = sms_inbound_usage + call_inbound_usage
@@ -308,9 +308,9 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             locations_count=Count('conversation__location__location_id', distinct=True),
         ).order_by('company_name')
 
-        # Group Call data by company
+        # Group Call data by company - Updated to use CallReport
         call_company_stats = calls_queryset.values(
-            'conversation__location__company_id',
+            'ghl_credential__company_id',
         ).annotate(
             # Call aggregations
             total_inbound_call_duration=Coalesce(
@@ -330,7 +330,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
 
         # Create a dictionary for quick call stats lookup
         call_company_stats_dict = {
-            stat['conversation__location__company_id']: stat
+            stat['ghl_credential__company_id']: stat
             for stat in call_company_stats
         }
 
@@ -359,26 +359,25 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 'call_price_ratio',
             )
 
-            # Pre-fetch SMS and Call data for all relevant locations within this company
-            # Added Coalesce to ensure integer values
+            # Pre-fetch SMS data for all relevant locations within this company
             sms_data_for_company = sms_queryset.filter(
                 conversation__location__company_id=company_id
             ).values(
                 'conversation__location__location_id',
                 'direction'
             ).annotate(
-                message_count=Coalesce(Count('id'), 0), # Corrected: Added Coalesce
-                segment_count=Coalesce(Sum('segments'), 0) # Corrected: Added Coalesce
+                message_count=Coalesce(Count('id'), 0),
+                segment_count=Coalesce(Sum('segments'), 0)
             )
 
-            # Added Coalesce to ensure integer values
+            # Pre-fetch Call data for all relevant locations within this company - Updated to use CallReport
             call_data_for_company = calls_queryset.filter(
-                conversation__location__company_id=company_id
+                ghl_credential__company_id=company_id
             ).values(
-                'conversation__location__location_id',
+                'ghl_credential__location_id',
                 'direction'
             ).annotate(
-                call_duration=Coalesce(Sum('duration'), 0) # Corrected: Added Coalesce
+                call_duration=Coalesce(Sum('duration'), 0)
             )
 
             # Organize pre-fetched data
@@ -399,7 +398,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
 
             call_location_summary = {}
             for item in call_data_for_company:
-                loc_id = item['conversation__location__location_id']
+                loc_id = item['ghl_credential__location_id']
                 if loc_id not in call_location_summary:
                     call_location_summary[loc_id] = {
                         'inbound_duration': 0, 'outbound_duration': 0
@@ -408,7 +407,6 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                     call_location_summary[loc_id]['inbound_duration'] += item['call_duration']
                 else:
                     call_location_summary[loc_id]['outbound_duration'] += item['call_duration']
-
 
             # Calculate total usage for this company
             total_sms_inbound_usage = Decimal('0.00')
@@ -541,8 +539,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 total_outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
             )
 
-            # Get Call statistics
-            call_stats = CallRecord.objects.aggregate(
+            # Get Call statistics - Updated to use CallReport
+            call_stats = CallReport.objects.aggregate(
                 total_calls=Coalesce(Count('id'), 0),
                 total_call_duration=Coalesce(Sum('duration'), 0),
                 total_inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
