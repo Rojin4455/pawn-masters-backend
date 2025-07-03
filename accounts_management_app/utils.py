@@ -404,7 +404,7 @@ def update_or_store_calls(calls, ghl_credential: GHLAuthCredentials):
             # Make sure 'ghl_credential' is NOT in this list as it's a FK and shouldn't change
             # once set for a CallReport (unless you have a very specific use case).
             CallReport.objects.bulk_update(update_call_objects, [
-                "account_sid", "assigned_to", "call_sid", "call_status","ghl_credential"
+                "account_sid", "assigned_to", "call_sid", "call_status","ghl_credential",
                 "contact_id", "date_added",
                 "date_updated", "deleted", "direction", "from_number",
                 "location_id", "message_id", "to_number",
