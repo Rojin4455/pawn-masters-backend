@@ -31,6 +31,8 @@ class GHLAuthCredentials(models.Model):
     is_conversation_pulled = models.BooleanField(null=True, blank=True, default=False)
     is_calls_pulled = models.BooleanField(null=True, blank=True, default=False)
     segment_length = models.IntegerField(default=160, null=True, blank=True)
+    ghl_initial_refresh_token = models.TextField(null=True, blank=True) # The static token for step 1
+
 
 
     def save(self, *args, **kwargs):
@@ -115,3 +117,93 @@ class SMSDefaultConfiguration(models.Model):
     
     def __str__(self):
         return f"SMS Config - Inbound: {self.default_inbound_rate} {self.default_currency}, Outbound: {self.default_outbound_rate} {self.default_currency}"
+    
+
+
+
+
+
+class FirebaseToken(models.Model):
+    ghl_credential = models.OneToOneField(GHLAuthCredentials, on_delete=models.CASCADE, related_name='firebase_token')
+    access_token = models.TextField()
+    expires_in = models.IntegerField()
+    token_type = models.CharField(max_length=50)
+    refresh_token = models.TextField()
+    id_token = models.TextField()
+    user_id = models.CharField(max_length=100)
+    project_id = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Firebase Token for {self.ghl_credential.location_name}"
+
+
+class LeadConnectorAuth(models.Model):
+    ghl_credential = models.OneToOneField(GHLAuthCredentials, on_delete=models.CASCADE, related_name='leadconnector_auth')
+    token = models.TextField()
+    trace_id = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"LeadConnector Auth for {self.ghl_credential.location_name}"
+
+
+class IdentityToolkitAuth(models.Model):
+    ghl_credential = models.OneToOneField(GHLAuthCredentials, on_delete=models.CASCADE, related_name='identitytoolkit_auth')
+    kind = models.CharField(max_length=100)
+    id_token = models.TextField()
+    refresh_token = models.TextField()
+    expires_in = models.IntegerField()
+    is_new_user = models.BooleanField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"IdentityToolkit Auth for {self.ghl_credential.location_name}"
+
+
+class CallReport(models.Model):
+    # Link CallReport to GHLAuthCredentials
+    ghl_credential = models.ForeignKey(GHLAuthCredentials, on_delete=models.CASCADE, related_name='call_reports', null=True, blank=True)
+
+    id = models.CharField(max_length=255, primary_key=True) # GHL provides 'id' for calls, use it as primary key
+    conversation_id = models.CharField(max_length=255, null=True, blank=True)
+    account_sid = models.CharField(max_length=255, null=True, blank=True)
+    assigned_to = models.CharField(max_length=255, null=True, blank=True)
+    call_sid = models.CharField(max_length=255, null=True, blank=True)
+    call_status = models.CharField(max_length=50, null=True, blank=True)
+    called = models.CharField(max_length=20, null=True, blank=True)
+    called_city = models.CharField(max_length=100, null=True, blank=True)
+    called_country = models.CharField(max_length=100, null=True, blank=True)
+    called_state = models.CharField(max_length=100, null=True, blank=True)
+    called_zip = models.CharField(max_length=20, null=True, blank=True)
+    caller = models.CharField(max_length=20, null=True, blank=True)
+    caller_city = models.CharField(max_length=100, null=True, blank=True)
+    caller_country = models.CharField(max_length=100, null=True, blank=True)
+    caller_state = models.CharField(max_length=100, null=True, blank=True)
+    caller_zip = models.CharField(max_length=20, null=True, blank=True)
+    contact_id = models.CharField(max_length=255, null=True, blank=True)
+    date_added = models.DateTimeField(null=True, blank=True)
+    date_updated = models.DateTimeField(null=True, blank=True)
+    deleted = models.BooleanField(default=False)
+    direction = models.CharField(max_length=50, null=True, blank=True)
+    from_number = models.CharField(max_length=20, null=True, blank=True)
+    from_city = models.CharField(max_length=100, null=True, blank=True)
+    from_country = models.CharField(max_length=100, null=True, blank=True)
+    from_state = models.CharField(max_length=100, null=True, blank=True)
+    from_zip = models.CharField(max_length=20, null=True, blank=True)
+    location_id = models.CharField(max_length=255, null=True, blank=True) # Redundant if linked by FK, but good for data integrity
+    message_id = models.CharField(max_length=255, null=True, blank=True)
+    to_number = models.CharField(max_length=20, null=True, blank=True)
+    to_city = models.CharField(max_length=100, null=True, blank=True)
+    to_country = models.CharField(max_length=100, null=True, blank=True)
+    to_state = models.CharField(max_length=100, null=True, blank=True)
+    to_zip = models.CharField(max_length=20, null=True, blank=True)
+    user_id = models.CharField(max_length=255, null=True, blank=True)
+    updated_at = models.DateTimeField(null=True, blank=True)
+    duration = models.IntegerField(default=0, null=True, blank=True)
+    first_time = models.BooleanField(default=False, null=True, blank=True)
+    recording_url = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True) # Add created_at for tracking
+
+    def __str__(self):
+        return f"Call {self.id} for {self.ghl_credential.location_name}"

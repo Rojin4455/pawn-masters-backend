@@ -37,3 +37,39 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 
+
+
+from rest_framework import serializers
+from .models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, GHLAuthCredentials, CallReport
+
+class GHLAuthCredentialsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GHLAuthCredentials
+        fields = '__all__'
+
+
+class FirebaseTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FirebaseToken
+        fields = '__all__'
+        read_only_fields = ['ghl_credential'] # ghl_credential will be set programmatically
+
+
+class LeadConnectorAuthSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeadConnectorAuth
+        fields = '__all__'
+        read_only_fields = ['ghl_credential']
+
+
+class IdentityToolkitAuthSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = IdentityToolkitAuth
+        fields = '__all__'
+        read_only_fields = ['ghl_credential']
+
+class CallReportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CallReport
+        fields = '__all__'
+        read_only_fields = ['ghl_credential']
