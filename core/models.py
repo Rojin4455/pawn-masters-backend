@@ -164,7 +164,7 @@ class IdentityToolkitAuth(models.Model):
 
 class CallReport(models.Model):
     # Link CallReport to GHLAuthCredentials
-    # ghl_credential = models.ForeignKey(GHLAuthCredentials, on_delete=models.CASCADE, related_name='call_reports', null=True, blank=True)
+    ghl_credential = models.ForeignKey(GHLAuthCredentials, on_delete=models.CASCADE, related_name='call_reports', null=True, blank=True)
     id = models.CharField(max_length=255, primary_key=True) # GHL provides 'id' for calls, use it as primary key
     conversation = models.ForeignKey('accounts_management_app.GHLConversation', on_delete=models.CASCADE, related_name='call_report', null=True, blank=True)
     account_sid = models.CharField(max_length=255, null=True, blank=True)

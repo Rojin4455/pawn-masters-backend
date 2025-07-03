@@ -362,6 +362,7 @@ def update_or_store_calls(calls, ghl_credential: GHLAuthCredentials):
             pass
         call_obj = CallReport(
             id=call_id,
+            ghl_credential=ghl_credential, # Link to the GHLAuthCredentials instance
             account_sid=call.get("accountSid"),
             assigned_to=call.get("assignedTo"),
             call_sid=call.get("callSid"),
