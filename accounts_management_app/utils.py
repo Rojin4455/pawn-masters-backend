@@ -367,39 +367,26 @@ def update_or_store_calls(calls, ghl_credential: GHLAuthCredentials):
             assigned_to=call.get("assignedTo"),
             call_sid=call.get("callSid"),
             call_status=call.get("callStatus"),
-            called=call.get("called"),
-            called_city=call.get("calledCity"),
-            called_country=call.get("calledCountry"),
-            called_state=call.get("calledState"),
-            called_zip=call.get("calledZip"),
-            caller=call.get("caller"),
-            caller_city=call.get("callerCity"),
-            caller_country=call.get("callerCountry"),
-            caller_state=call.get("callerState"),
-            caller_zip=call.get("callerZip"),
+            # Removed: called, called_city, called_country, called_state, called_zip
+            # Removed: caller, caller_city, caller_country, caller_state, caller_zip
             contact_id=call.get("contactId"),
             date_added=parse_datetime(call.get("dateAdded")) if call.get("dateAdded") else None,
             date_updated=parse_datetime(call.get("dateUpdated")) if call.get("dateUpdated") else None,
             deleted=call.get("deleted", False),
             direction=call.get("direction"),
             from_number=call.get("from"),
-            from_city=call.get("fromCity"),
-            from_country=call.get("fromCountry"),
-            from_state=call.get("fromState"),
-            from_zip=call.get("fromZip"),
+            # Removed: from_city, from_country, from_state, from_zip
             location_id=call.get("locationId"), # Still keep this for redundancy/cross-referencing if useful
             message_id=call.get("messageId"),
             to_number=call.get("to"),
-            to_city=call.get("toCity"),
-            to_country=call.get("toCountry"),
-            to_state=call.get("toState"),
-            to_zip=call.get("toZip"),
+            # Removed: to_city, to_country, to_state, to_zip
             user_id=call.get("userId"),
             updated_at=parse_datetime(call.get("updatedAt")) if call.get("updatedAt") else None,
             duration=call.get("duration", 0),
             first_time=call.get("firstTime", False),
             recording_url=call.get("recordingUrl"),
             conversation=conversation
+            # Removed: created_at (as it's auto_now_add=True)
         )
 
         if call_id in existing_call_ids:
@@ -417,13 +404,12 @@ def update_or_store_calls(calls, ghl_credential: GHLAuthCredentials):
             # Make sure 'ghl_credential' is NOT in this list as it's a FK and shouldn't change
             # once set for a CallReport (unless you have a very specific use case).
             CallReport.objects.bulk_update(update_call_objects, [
-                "account_sid", "assigned_to", "call_sid", "call_status", "called", "called_city",
-                "called_country", "called_state", "called_zip", "caller", "caller_city",
-                "caller_country", "caller_state", "caller_zip", "contact_id", "date_added",
-                "date_updated", "deleted", "direction", "from_number", "from_city", "from_country",
-                "from_state", "from_zip", "location_id", "message_id", "to_number", "to_city",
-                "to_country", "to_state", "to_zip", "user_id", "updated_at", "duration",
-                "first_time", "recording_url","conversation"
+                "account_sid", "assigned_to", "call_sid", "call_status",
+                "contact_id", "date_added",
+                "date_updated", "deleted", "direction", "from_number",
+                "location_id", "message_id", "to_number",
+                "user_id", "updated_at", "duration",
+                "first_time", "recording_url", "conversation"
             ])
             print(f"Updated {len(update_call_objects)} existing call records for {ghl_credential.location_name}.")
 
