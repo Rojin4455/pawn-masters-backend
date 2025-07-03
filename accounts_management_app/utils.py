@@ -425,7 +425,7 @@ def process_all_ghl_locations_for_calls():
         return
 
     for credential in ghl_credentials:
-        if credential.location_id == 'LiqylNMHx0Q2hMogsVP5':
+        if credential.location_id in ['jl8fn7mpZ2UUZ6ZCOus8']:
             print(f"\n--- Processing location: {credential.location_name} (ID: {credential.location_id}) ---")
             fetch_calls_for_last_days_for_location(credential)
             print(f"--- Finished processing for {credential.location_name} ---\n")
