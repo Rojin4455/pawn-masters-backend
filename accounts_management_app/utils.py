@@ -7,6 +7,7 @@ import pytz
 import datetime
 from django.utils.dateparse import parse_datetime
 from django.db import transaction
+from accounts_management_app.models import GHLConversation
 
 # Constants for the API keys (consider moving to settings or more secure management)
 FIREBASE_TOKEN_API_KEY = "AIzaSyB_w3vXmsI7WeQtrIOkjR6xTRVN5uOieiE"
@@ -354,7 +355,11 @@ def update_or_store_calls(calls, ghl_credential: GHLAuthCredentials):
         if not call_id:
             print(f"Skipping call record with no ID: {call}")
             continue
-
+        conversation = None
+        try:
+            conversation = GHLConversation.objects.get(contact_id = call.get("contactId"))
+        except:
+            pass
         call_obj = CallReport(
             id=call_id,
             ghl_credential=ghl_credential, # Link to the GHLAuthCredentials instance
@@ -394,7 +399,7 @@ def update_or_store_calls(calls, ghl_credential: GHLAuthCredentials):
             duration=call.get("duration", 0),
             first_time=call.get("firstTime", False),
             recording_url=call.get("recordingUrl"),
-            conversation_id=call.get("converastionId")
+            conversation=conversation
         )
 
         if call_id in existing_call_ids:
@@ -418,7 +423,7 @@ def update_or_store_calls(calls, ghl_credential: GHLAuthCredentials):
                 "date_updated", "deleted", "direction", "from_number", "from_city", "from_country",
                 "from_state", "from_zip", "location_id", "message_id", "to_number", "to_city",
                 "to_country", "to_state", "to_zip", "user_id", "updated_at", "duration",
-                "first_time", "recording_url","conversation_id"
+                "first_time", "recording_url","conversation"
             ])
             print(f"Updated {len(update_call_objects)} existing call records for {ghl_credential.location_name}.")
 
