@@ -181,3 +181,23 @@ class WebhookLog(models.Model):
     
 
 
+
+
+
+class GHLWalletBalance(models.Model):
+
+    ghl_credential = models.OneToOneField(
+        'core.GHLAuthCredentials', # Replace 'core' with your actual app name if different
+        on_delete=models.CASCADE,
+        primary_key=True, # Makes this field the primary key, simplifying lookup
+        related_name='wallet_balance' # Allows you to access balance from credential: credential.wallet_balance
+    )
+    current_balance = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    last_synced_at = models.DateTimeField(auto_now=True) # Tracks when it was last updated
+
+    def __str__(self):
+        return f"Wallet for {self.ghl_credential.location_name} - Balance: {self.current_balance}"
+
+    class Meta:
+        verbose_name = "GHL Wallet Balance"
+        verbose_name_plural = "GHL Wallet Balances"

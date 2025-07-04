@@ -7,7 +7,7 @@ import pytz
 import datetime
 from django.utils.dateparse import parse_datetime
 from django.db import transaction
-from accounts_management_app.models import GHLConversation
+from accounts_management_app.models import GHLConversation, GHLWalletBalance
 
 # Constants for the API keys (consider moving to settings or more secure management)
 FIREBASE_TOKEN_API_KEY = "AIzaSyB_w3vXmsI7WeQtrIOkjR6xTRVN5uOieiE"
@@ -425,7 +425,115 @@ def process_all_ghl_locations_for_calls():
         return
 
     for credential in ghl_credentials:
-        if credential.location_id in ['jl8fn7mpZ2UUZ6ZCOus8']:
-            print(f"\n--- Processing location: {credential.location_name} (ID: {credential.location_id}) ---")
-            fetch_calls_for_last_days_for_location(credential)
-            print(f"--- Finished processing for {credential.location_name} ---\n")
+        # if credential.location_id in ['jl8fn7mpZ2UUZ6ZCOus8']:
+        print(f"\n--- Processing location: {credential.location_name} (ID: {credential.location_id}) ---")
+        fetch_calls_for_last_days_for_location(credential)
+        print(f"--- Finished processing for {credential.location_name} ---\n")
+
+
+
+
+import json
+
+
+class DummyGHLAuthCredentials:
+    def __init__(self, location_id, location_name="Dummy Location"):
+        self.location_id = location_id
+        self.location_name = location_name
+
+# --- Your function to make the API call ---
+def fetch_location_wallet_data(ghl_credential):
+    """
+    Fetches location wallet data from the LeadConnector HQ API.
+
+    Args:
+        ghl_credential (GHLAuthCredentials): An instance of GHLAuthCredentials
+                                             containing the location_id.
+
+    Returns:
+        dict or None: Parsed JSON response if successful, otherwise None.
+    """
+    base_url = "https://services.leadconnectorhq.com"
+    endpoint = f"/saas_wallet_service/location-wallet/{ghl_credential.location_id}"
+    request_url = f"{base_url}{endpoint}"
+
+    # Fetch the token using your existing function
+    token_id = get_ghl_auth_token(ghl_credential)
+    if not token_id:
+        print(f"Failed to get a valid authentication token for {ghl_credential.location_name}. Skipping wallet fetch.")
+        return None
+
+    # Define the headers based on your network tab capture
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Source": "WEB_USER",
+        "Token-Id": token_id, # This is the crucial part using your function's output
+        "Version": "2021-07-28" # This 'Version' header might be specific to GHL's internal API versioning
+    }
+
+    try:
+        print(f"Making GET request to: {request_url}")
+        response = requests.get(request_url, headers=headers)
+        response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+
+        data = response.json()
+        print("Successfully fetched location wallet data.")
+        # print(json.dumps(data, indent=2)) # Pretty print the response if needed
+        return data
+
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err} - {response.text}")
+    except requests.exceptions.ConnectionError as conn_err:
+        print(f"Connection error occurred: {conn_err}")
+    except requests.exceptions.Timeout as timeout_err:
+        print(f"Timeout error occurred: {timeout_err}")
+    except requests.exceptions.RequestException as req_err:
+        print(f"An unexpected request error occurred: {req_err}")
+    except json.JSONDecodeError:
+        print(f"Failed to decode JSON from response: {response.text}")
+    return None
+
+
+def sync_wallet_balance(location_id=None):
+    """
+    Fetches wallet data and syncs it to the GHLWalletBalance model.
+    """
+    try:
+        # Get the GHLAuthCredentials instance for the given location_id
+        if location_id:
+            ghl_credentials = [GHLAuthCredentials.objects.get(location_id=location_id)]
+        else:
+            ghl_credentials = GHLAuthCredentials.objects.all()
+    except GHLAuthCredentials.DoesNotExist:
+        print(f"Error: GHLAuthCredentials with location_id '{location_id}' not found. Cannot sync wallet.")
+        return
+    
+    for ghl_credential in ghl_credentials:
+        wallet_data = fetch_location_wallet_data(ghl_credential)
+
+        if wallet_data:
+            # Use transaction.atomic() to ensure database operations are atomic
+            # i.e., either all succeed or all are rolled back.
+            with transaction.atomic():
+                # Get or create the GHLWalletBalance record for this credential
+                # primary_key=True on the OneToOneField means get_or_create needs the PK
+                wallet_balance_obj, created = GHLWalletBalance.objects.get_or_create(
+                    ghl_credential=ghl_credential, # Link to the GHLAuthCredentials instance
+                    defaults={
+                        'current_balance': wallet_data.get("currentBalance"),
+                    }
+                )
+
+                if not created:
+                    # If the object already existed, update its fields
+                    wallet_balance_obj.current_balance = wallet_data.get("currentBalance")
+                    
+                    wallet_balance_obj.save()
+                    print(f"Updated wallet balance for {ghl_credential.location_name}.")
+                else:
+                    print(f"Created new wallet balance record for {ghl_credential.location_name}.")
+
+            print(f"\n--- Fetched Wallet Data for {ghl_credential.location_name} ---")
+            print(json.dumps(wallet_data, indent=2)) # Still print the fetched data
+        else:
+            print(f"\nFailed to fetch wallet data for {ghl_credential.location_name}.")

@@ -10,6 +10,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from accounts_management_app.models import Contact, GHLConversation, TextMessage
+from accounts_management_app.utils import sync_wallet_balance
 
 
 
@@ -26,6 +27,15 @@ def handle_webhook_event(data, event_type):
             print(f"Unhandled event type: {event_type}")
     except Exception as e:
         print(f"Error handling webhook event {event_type}: {str(e)}")
+
+
+
+
+@shared_task
+def refresh_wallet_balance():
+    sync_wallet_balance()
+    
+
 
 
 def handle_message_event(data):
