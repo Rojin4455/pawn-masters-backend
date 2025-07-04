@@ -5,6 +5,10 @@ from decimal import Decimal
 from rest_framework import serializers
 from category_app.serializers import CategoryCreateUpdateSerializer
 from category_app.models import Category
+from rest_framework import serializers
+from django.db.models import Sum, F
+from decimal import Decimal
+from accounts_management_app.models import GHLWalletBalance
 
 
 class GHLAuthCredentialsSerializer(serializers.ModelSerializer):
@@ -164,8 +168,8 @@ class AccountViewWithCallsSerializer(serializers.Serializer):
             "total_outbound_messages": obj["total_outbound_messages"],
             "sms_inbound_usage": round(float(obj["sms_inbound_usage"]), 3),
             "sms_outbound_usage": round(float(obj["sms_outbound_usage"]), 3),
-            "sms_inbound_rate": round(float(obj["sms_inbound_rate"]), 7), # Rate precision
-            "sms_outbound_rate": round(float(obj["sms_outbound_rate"]), 7), # Rate precision
+            "sms_inbound_rate": round(float(obj["sms_inbound_rate"]), 7),
+            "sms_outbound_rate": round(float(obj["sms_outbound_rate"]), 7),
             "total_sms_usage": round(float(obj["total_sms_usage"]), 3)
         }
 
@@ -179,17 +183,39 @@ class AccountViewWithCallsSerializer(serializers.Serializer):
             "total_outbound_call_minutes": round(float(obj["outbound_call_minutes"]), 2),
             "call_inbound_usage": round(float(obj["call_inbound_usage"]), 3),
             "call_outbound_usage": round(float(obj["call_outbound_usage"]), 3),
-            "call_inbound_rate": round(float(obj["call_inbound_rate"]), 7), # Rate precision
-            "call_outbound_rate": round(float(obj["call_outbound_rate"]), 7), # Rate precision
+            "call_inbound_rate": round(float(obj["call_inbound_rate"]), 7),
+            "call_outbound_rate": round(float(obj["call_outbound_rate"]), 7),
             "total_call_usage": round(float(obj["total_call_usage"]), 3)
         }
 
     def get_combined_totals(self, obj):
+        location_id = obj.get("location_id")
+        wallet_balance = Decimal('0.00') # Initialize as Decimal
+
+        if location_id:
+            try:
+                # Fetch the wallet balance for this specific location
+                # We use .get() on the related_name 'wallet_balance'
+                wallet = GHLAuthCredentials.objects.get(location_id=location_id).wallet_balance
+                if wallet.current_balance is not None:
+                    wallet_balance = wallet.current_balance
+            except GHLAuthCredentials.DoesNotExist:
+                # Handle cases where the credential might not exist
+                pass
+            except GHLWalletBalance.DoesNotExist:
+                # Handle cases where the wallet balance might not exist for the credential
+                pass
+            except Exception as e:
+                # Log other potential errors
+                print(f"Error fetching wallet for location {location_id}: {e}")
+
         return {
             "total_inbound_usage": round(float(obj["total_inbound_usage"]), 3),
             "total_outbound_usage": round(float(obj["total_outbound_usage"]), 3),
-            "total_usage": round(float(obj["total_usage"]), 3)
+            "total_usage": round(float(obj["total_usage"]), 3),
+            "wallet_balance": round(float(wallet_balance), 2) # Round wallet balance for display
         }
+
 
 class CompanyViewWithCallsSerializer(serializers.Serializer):
     company_name = serializers.CharField()
@@ -221,9 +247,30 @@ class CompanyViewWithCallsSerializer(serializers.Serializer):
         }
 
     def get_combined_totals(self, obj):
+        company_id = obj.get("company_id")
+        total_wallet_balance = Decimal('0.00') # Initialize as Decimal
+
+        if company_id:
+            try:
+                # Find all GHLAuthCredentials for this company_id
+                # (Assuming GHLAuthCredentials has a 'company_id' field)
+                # Then, related_name 'wallet_balance' from GHLAuthCredentials to GHLWalletBalance
+                # Filter only by approved locations, if that's a requirement
+                wallet_balances = GHLWalletBalance.objects.filter(
+                    ghl_credential__company_id=company_id,
+                    ghl_credential__is_approved=True # Filter for approved credentials if needed
+                ).aggregate(total_balance=Sum('current_balance')) # Sum up current_balance
+
+                if wallet_balances and wallet_balances['total_balance'] is not None:
+                    total_wallet_balance = wallet_balances['total_balance']
+
+            except Exception as e:
+                print(f"Error fetching total wallet balance for company {company_id}: {e}")
+
         return {
             "total_inbound_usage": round(float(obj["total_inbound_usage"]), 3),
             "total_outbound_usage": round(float(obj["total_outbound_usage"]), 3),
             "total_usage": round(float(obj["total_usage"]), 3),
-            "locations_count": obj["locations_count"]
+            "locations_count": obj["locations_count"],
+            "total_wallet_balance": round(float(total_wallet_balance), 2) # Round for display
         }

@@ -16,6 +16,8 @@ from .serializers import (
     AccountViewSerializer, CompanyViewSerializer, 
     AnalyticsRequestSerializer
 )
+from django.core.exceptions import ObjectDoesNotExist
+
 
 
 from django.db import transaction
@@ -27,8 +29,9 @@ from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from accounts_management_app.models import WebhookLog
-from accounts_management_app.tasks import handle_webhook_event
-
+from accounts_management_app.tasks import handle_webhook_event,fetch_calls_task
+from rest_framework.views import APIView
+from accounts_management_app.utils import sync_wallet_balance,fetch_calls_for_last_days_for_location
 
 
 
@@ -77,7 +80,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         """
         Get base SMS queryset with applied filters
         """
-        queryset = TextMessage.objects.select_related('conversation__location')
+        # queryset = TextMessage.objects.select_related('conversation__location')
+        queryset = TextMessage.objects.select_related('conversation__location').filter(
+            conversation__location__is_approved=True
+        )
 
         # Apply date range filter
         if filters.get('date_range'):
@@ -106,7 +112,11 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         Get base Calls queryset with applied filters - Updated to use CallReport
         """
         # Updated to use CallReport instead of CallRecord
-        queryset = CallReport.objects.select_related('ghl_credential')
+        # queryset = CallReport.objects.select_related('ghl_credential')
+        queryset = CallReport.objects.select_related('ghl_credential').filter(
+            ghl_credential__is_approved=True
+        )
+
 
         # Apply date range filter
         if filters.get('date_range'):
@@ -745,3 +755,75 @@ def webhook_handler(request):
         return JsonResponse({"message":"Webhook received"}, status=200)
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+    
+
+
+
+class WalletSyncView(APIView):
+
+    permission_classes = [permissions.IsAuthenticated]
+    """
+    API endpoint to sync GHL wallet balances.
+    Accepts an optional 'location_id' query parameter.
+    """
+    def get(self, request, *args, **kwargs):
+        location_id = request.query_params.get('location_id')
+
+        # Pass the location_id to your sync function
+        sync_result = sync_wallet_balance(location_id=location_id)
+
+        # Determine HTTP status based on overall sync status
+        http_status = status.HTTP_200_OK
+        if sync_result.get("status") == "error":
+            http_status = status.HTTP_400_BAD_REQUEST # Or 500 if it's a server-side error
+        elif sync_result.get("status") == "info":
+             http_status = status.HTTP_200_OK # No credentials found, but not an error
+
+        return Response(sync_result, status=http_status)
+    
+
+
+class CallSyncView(APIView):
+
+
+    permission_classes = [permissions.IsAuthenticated]
+    """
+    API endpoint to sync GHL call reports.
+    Requires either 'location_id' or 'company_id' as a query parameter.
+    Optional: 'days_to_fetch' (integer, defaults to 365)
+    """
+    def get(self, request, *args, **kwargs):
+        location_id = request.query_params.get('location_id')
+        company_id = request.query_params.get('company_id')
+
+        # Validate input parameters
+        if not location_id and not company_id:
+            return Response(
+                {"status": "error", "message": "Either 'location_id' or 'company_id' must be provided."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+
+        credentials = []
+
+        if location_id:
+            try:
+                credential = GHLAuthCredentials.objects.get(location_id=location_id)
+                credentials.append(credential)
+            except ObjectDoesNotExist:
+                return Response(
+                    {"status": "error", "message": "No credentials found for the given location_id."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        elif company_id:
+            credentials = list(GHLAuthCredentials.objects.filter(company_id=company_id))
+            if not credentials:
+                return Response(
+                    {"status": "error", "message": "No credentials found for the given company_id."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        for credential in credentials:
+            fetch_calls_task.delay(credential.id)
+
+        return Response({"status": "success", "message": "Call fetching initiated."})

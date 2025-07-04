@@ -2,7 +2,8 @@ import requests
 from celery import shared_task
 from core.models import GHLAuthCredentials
 from decouple import config
-from accounts_management_app.services import fetch_all_contacts, sync_conversations_with_messages, save_conversations_with_calls
+from accounts_management_app.utils import fetch_calls_for_last_days_for_location
+from accounts_management_app.services import fetch_all_contacts, sync_conversations_with_messages
 
 @shared_task
 def make_api_call():
@@ -50,4 +51,6 @@ def async_sync_conversations_with_messages(location_id, access_token):
 
 @shared_task
 def async_sync_conversations_with_calls(location_id, access_token):
-    save_conversations_with_calls(location_id)
+    credential = GHLAuthCredentials.objects.get(location_id = location_id)
+    fetch_calls_for_last_days_for_location(credential,days_to_fetch=365*3)
+    # save_conversations_with_calls(location_id)

@@ -12,11 +12,6 @@ import math
 
 
 
-
-
-
-
-
 def fetch_all_contacts(location_id: str, access_token: str = None) -> List[Dict[str, Any]]:
     """
     Fetch all contacts from GoHighLevel API with proper pagination handling.
@@ -581,219 +576,219 @@ def save_conversations_with_messges(location_id, access_token):
 
 
 
-def sync_conversation_calls(conversation_id, location_id, access_token):
-    """
-    Sync all call records for a specific conversation from GHL to the local DB.
-    """
+# def sync_conversation_calls(conversation_id, location_id, access_token):
+#     """
+#     Sync all call records for a specific conversation from GHL to the local DB.
+#     """
 
-    # Get location and timezone
-    try:
-        location = GHLAuthCredentials.objects.get(location_id=location_id)
-        tz = ZoneInfo(location.timezone or "UTC")
-    except GHLAuthCredentials.DoesNotExist:
-        print(f"Location {location_id} not found.")
-        return 0
-    except Exception as e:
-        print(f"Timezone error: {e}")
-        return 0
+#     # Get location and timezone
+#     try:
+#         location = GHLAuthCredentials.objects.get(location_id=location_id)
+#         tz = ZoneInfo(location.timezone or "UTC")
+#     except GHLAuthCredentials.DoesNotExist:
+#         print(f"Location {location_id} not found.")
+#         return 0
+#     except Exception as e:
+#         print(f"Timezone error: {e}")
+#         return 0
 
-    # Get conversation instance
-    try:
-        conversation = GHLConversation.objects.get(conversation_id=conversation_id)
-    except GHLConversation.DoesNotExist:
-        print(f"Conversation {conversation_id} not found.")
-        return 0
+#     # Get conversation instance
+#     try:
+#         conversation = GHLConversation.objects.get(conversation_id=conversation_id)
+#     except GHLConversation.DoesNotExist:
+#         print(f"Conversation {conversation_id} not found.")
+#         return 0
 
-    base_url = f"https://services.leadconnectorhq.com/conversations/{conversation_id}/messages?type=TYPE_CALL"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Version": "2021-04-15"
-    }
+#     base_url = f"https://services.leadconnectorhq.com/conversations/{conversation_id}/messages?type=TYPE_CALL"
+#     headers = {
+#         "Authorization": f"Bearer {access_token}",
+#         "Accept": "application/json",
+#         "Version": "2021-04-15"
+#     }
 
-    def to_local_dt(date_str):
-        try:
-            return datetime.fromisoformat(date_str.replace('Z', '+00:00')).astimezone(tz) if date_str else None
-        except Exception as e:
-            print(f"Date parse error: {e}")
-            return None
+#     def to_local_dt(date_str):
+#         try:
+#             return datetime.fromisoformat(date_str.replace('Z', '+00:00')).astimezone(tz) if date_str else None
+#         except Exception as e:
+#             print(f"Date parse error: {e}")
+#             return None
 
-    def build_call_obj(msg):
-        # Extract call metadata
-        call_meta = msg.get("meta", {}).get("call", {})
-        duration = call_meta.get("duration", 0)
+#     def build_call_obj(msg):
+#         # Extract call metadata
+#         call_meta = msg.get("meta", {}).get("call", {})
+#         duration = call_meta.get("duration", 0)
         
-        return CallRecord(
-            message_id=msg["id"],
-            conversation=conversation,
-            alt_id=msg.get("altId", ""),
-            message_type=msg.get("messageType", "TYPE_CALL"),
-            direction=msg.get("direction", ""),
-            status=msg.get("meta", {}).get("status") if msg.get("meta", {}).get("status", "") else msg.get("status", ""),
-            type=msg.get("type", 0),
-            duration=duration,
-            call_meta=msg.get("meta", {}),
-            location_id=msg.get("locationId", location_id),
-            contact_id=msg.get("contactId", ""),
-            user_id=msg.get("userId", ""),
-            date_added=to_local_dt(msg.get("dateAdded")),
-        )
+#         return CallRecord(
+#             message_id=msg["id"],
+#             conversation=conversation,
+#             alt_id=msg.get("altId", ""),
+#             message_type=msg.get("messageType", "TYPE_CALL"),
+#             direction=msg.get("direction", ""),
+#             status=msg.get("meta", {}).get("status") if msg.get("meta", {}).get("status", "") else msg.get("status", ""),
+#             type=msg.get("type", 0),
+#             duration=duration,
+#             call_meta=msg.get("meta", {}),
+#             location_id=msg.get("locationId", location_id),
+#             contact_id=msg.get("contactId", ""),
+#             user_id=msg.get("userId", ""),
+#             date_added=to_local_dt(msg.get("dateAdded")),
+#         )
 
-    all_calls = []
-    last_message_id = None
-    page = 0
+#     all_calls = []
+#     last_message_id = None
+#     page = 0
 
-    while True:
-        page += 1
-        params = {"lastMessageId": last_message_id} if last_message_id else {}
-        params["limit"] = 100
+#     while True:
+#         page += 1
+#         params = {"lastMessageId": last_message_id} if last_message_id else {}
+#         params["limit"] = 100
 
-        print(f"Fetching call records page {page} for conversation {conversation_id}")
-        res = requests.get(base_url, headers=headers, params=params)
+#         print(f"Fetching call records page {page} for conversation {conversation_id}")
+#         res = requests.get(base_url, headers=headers, params=params)
 
-        if res.status_code != 200:
-            print(f"Failed to fetch calls: {res.text}")
-            break
+#         if res.status_code != 200:
+#             print(f"Failed to fetch calls: {res.text}")
+#             break
 
-        data = res.json().get("messages", {})
-        messages = data.get("messages", [])
-        if not messages:
-            break
+#         data = res.json().get("messages", {})
+#         messages = data.get("messages", [])
+#         if not messages:
+#             break
 
-        all_calls += [build_call_obj(msg) for msg in messages]
-        last_message_id = messages[-1]["id"]
+#         all_calls += [build_call_obj(msg) for msg in messages]
+#         last_message_id = messages[-1]["id"]
 
-        # if not data.get("nextPage") or page > 100:
-        #     break
+#         # if not data.get("nextPage") or page > 100:
+#         #     break
 
-    # Save to DB
-    if not all_calls:
-        print(f"No call records found for conversation {conversation_id}")
-        return 0
+#     # Save to DB
+#     if not all_calls:
+#         print(f"No call records found for conversation {conversation_id}")
+#         return 0
 
-    try:
-        with transaction.atomic():
-            existing_ids = set(
-                CallRecord.objects.filter(
-                    message_id__in=[c.message_id for c in all_calls]
-                ).values_list("message_id", flat=True)
-            )
+#     try:
+#         with transaction.atomic():
+#             existing_ids = set(
+#                 CallRecord.objects.filter(
+#                     message_id__in=[c.message_id for c in all_calls]
+#                 ).values_list("message_id", flat=True)
+#             )
 
-            to_create = [c for c in all_calls if c.message_id not in existing_ids]
-            to_update_map = {c.message_id: c for c in all_calls if c.message_id in existing_ids}
+#             to_create = [c for c in all_calls if c.message_id not in existing_ids]
+#             to_update_map = {c.message_id: c for c in all_calls if c.message_id in existing_ids}
 
-            if to_create:
-                CallRecord.objects.bulk_create(to_create, ignore_conflicts=True)
-                print(f"Created {len(to_create)} new call records")
+#             if to_create:
+#                 CallRecord.objects.bulk_create(to_create, ignore_conflicts=True)
+#                 print(f"Created {len(to_create)} new call records")
 
-            if to_update_map:
-                existing = CallRecord.objects.filter(message_id__in=to_update_map.keys())
-                updated_count = 0
-                for call in existing:
-                    new_data = to_update_map[call.message_id]
-                    if call.status != new_data.status or call.duration != new_data.duration:
-                        call.status = new_data.status
-                        call.duration = new_data.duration
-                        call.call_meta = new_data.call_meta
-                        updated_count += 1
+#             if to_update_map:
+#                 existing = CallRecord.objects.filter(message_id__in=to_update_map.keys())
+#                 updated_count = 0
+#                 for call in existing:
+#                     new_data = to_update_map[call.message_id]
+#                     if call.status != new_data.status or call.duration != new_data.duration:
+#                         call.status = new_data.status
+#                         call.duration = new_data.duration
+#                         call.call_meta = new_data.call_meta
+#                         updated_count += 1
                 
-                if updated_count > 0:
-                    CallRecord.objects.bulk_update(existing, ['status', 'duration', 'call_meta'])
-                    print(f"Updated {updated_count} existing call records")
+#                 if updated_count > 0:
+#                     CallRecord.objects.bulk_update(existing, ['status', 'duration', 'call_meta'])
+#                     print(f"Updated {updated_count} existing call records")
 
-        print(f"Synced {len(all_calls)} call records ({len(to_create)} new, {len(to_update_map)} existing)")
-    except Exception as e:
-        print(f"Error during call records DB sync: {e}")
-        return 0
+#         print(f"Synced {len(all_calls)} call records ({len(to_create)} new, {len(to_update_map)} existing)")
+#     except Exception as e:
+#         print(f"Error during call records DB sync: {e}")
+#         return 0
 
-    return len(all_calls)
+#     return len(all_calls)
 
 
-def save_conversations_with_calls(location_id):
+# def save_conversations_with_calls(location_id):
 
-    token = GHLAuthCredentials.objects.get(location_id=location_id)
-    access_token=token.access_token
-    """
-    Main function to sync call records for all conversations.
-    """
-    all_conversations = GHLConversation.objects.filter(location__location_id=location_id)
+#     token = GHLAuthCredentials.objects.get(location_id=location_id)
+#     access_token=token.access_token
+#     """
+#     Main function to sync call records for all conversations.
+#     """
+#     all_conversations = GHLConversation.objects.filter(location__location_id=location_id)
     
-    print("\n" + "="*50)
-    print("STARTING CALL RECORDS SYNC FOR ALL CONVERSATIONS")
-    print("="*50)
+#     print("\n" + "="*50)
+#     print("STARTING CALL RECORDS SYNC FOR ALL CONVERSATIONS")
+#     print("="*50)
     
-    # Get all conversation IDs that were just processed
-    conversation_ids = [conv.conversation_id for conv in all_conversations]
-    total_calls_synced = 0
+#     # Get all conversation IDs that were just processed
+#     conversation_ids = [conv.conversation_id for conv in all_conversations]
+#     total_calls_synced = 0
     
-    for i, conv_id in enumerate(conversation_ids, 1):
-        print(f"\nSyncing call records for conversation {i}/{len(conversation_ids)}: {conv_id}")
-        calls_count = sync_conversation_calls(conv_id, location_id, access_token)
+#     for i, conv_id in enumerate(conversation_ids, 1):
+#         print(f"\nSyncing call records for conversation {i}/{len(conversation_ids)}: {conv_id}")
+#         calls_count = sync_conversation_calls(conv_id, location_id, access_token)
         
-        total_calls_synced += calls_count
+#         total_calls_synced += calls_count
         
-        # Optional: Add a small delay to avoid rate limiting
-        import time
-        time.sleep(0.1)  # 100ms delay between requests
+#         # Optional: Add a small delay to avoid rate limiting
+#         import time
+#         time.sleep(0.1)  # 100ms delay between requests
     
-    print(f"\n" + "="*50)
-    print(f"CALL RECORDS SYNC COMPLETED")
-    print(f"Total conversations processed: {len(all_conversations)}")
-    print(f"Total call records synced: {total_calls_synced}")
-    print("="*50)
+#     print(f"\n" + "="*50)
+#     print(f"CALL RECORDS SYNC COMPLETED")
+#     print(f"Total conversations processed: {len(all_conversations)}")
+#     print(f"Total call records synced: {total_calls_synced}")
+#     print("="*50)
     
-    return total_calls_synced
+#     return total_calls_synced
 
 
 
-def save_conversations_with_messages_and_calls(location_id):
+# def save_conversations_with_messages_and_calls(location_id):
 
-    token = GHLAuthCredentials.objects.get(location_id=location_id)
-    access_token=token.access_token
-    """
-    Combined function to sync both text messages and call records.
-    """
-    all_conversations = GHLConversation.objects.filter(location__location_id=location_id)
+#     token = GHLAuthCredentials.objects.get(location_id=location_id)
+#     access_token=token.access_token
+#     """
+#     Combined function to sync both text messages and call records.
+#     """
+#     all_conversations = GHLConversation.objects.filter(location__location_id=location_id)
     
-    print("\n" + "="*60)
-    print("STARTING COMBINED SYNC FOR ALL CONVERSATIONS")
-    print("="*60)
+#     print("\n" + "="*60)
+#     print("STARTING COMBINED SYNC FOR ALL CONVERSATIONS")
+#     print("="*60)
     
-    conversation_ids = [conv.conversation_id for conv in all_conversations]
-    total_messages_synced = 0
-    total_calls_synced = 0
+#     conversation_ids = [conv.conversation_id for conv in all_conversations]
+#     total_messages_synced = 0
+#     total_calls_synced = 0
     
-    for i, conv_id in enumerate(conversation_ids, 1):
-        print(f"\nProcessing conversation {i}/{len(conversation_ids)}: {conv_id}")
+#     for i, conv_id in enumerate(conversation_ids, 1):
+#         print(f"\nProcessing conversation {i}/{len(conversation_ids)}: {conv_id}")
         
-        # Sync text messages
-        print(f"  → Syncing text messages...")
-        messages_count = sync_conversation_text_messages(conv_id, location_id, access_token)
-        total_messages_synced += messages_count
+#         # Sync text messages
+#         print(f"  → Syncing text messages...")
+#         messages_count = sync_conversation_text_messages(conv_id, location_id, access_token)
+#         total_messages_synced += messages_count
         
-        # Small delay between different API calls
-        import time
-        time.sleep(0.1)
+#         # Small delay between different API calls
+#         import time
+#         time.sleep(0.1)
         
-        # Sync call records
-        print(f"  → Syncing call records...")
-        calls_count = sync_conversation_calls(conv_id, location_id, access_token)
-        total_calls_synced += calls_count
+#         # Sync call records
+#         print(f"  → Syncing call records...")
+#         calls_count = sync_conversation_calls(conv_id, location_id, access_token)
+#         total_calls_synced += calls_count
         
-        print(f"  → Conversation summary: {messages_count} messages, {calls_count} calls")
+#         print(f"  → Conversation summary: {messages_count} messages, {calls_count} calls")
         
-        # Delay between conversations
-        time.sleep(0.1)
+#         # Delay between conversations
+#         time.sleep(0.1)
     
-    print(f"\n" + "="*60)
-    print(f"COMBINED SYNC COMPLETED")
-    print(f"Total conversations processed: {len(all_conversations)}")
-    print(f"Total text messages synced: {total_messages_synced}")
-    print(f"Total call records synced: {total_calls_synced}")
-    print("="*60)
+#     print(f"\n" + "="*60)
+#     print(f"COMBINED SYNC COMPLETED")
+#     print(f"Total conversations processed: {len(all_conversations)}")
+#     print(f"Total text messages synced: {total_messages_synced}")
+#     print(f"Total call records synced: {total_calls_synced}")
+#     print("="*60)
     
-    return {
-        'conversations': len(all_conversations),
-        'messages': total_messages_synced,
-        'calls': total_calls_synced
-    }
+#     return {
+#         'conversations': len(all_conversations),
+#         'messages': total_messages_synced,
+#         'calls': total_calls_synced
+#     }

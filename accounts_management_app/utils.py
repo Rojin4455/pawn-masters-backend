@@ -237,7 +237,7 @@ def get_ghl_auth_token(ghl_credential: GHLAuthCredentials):
     return identity_token.id_token
 
 
-def fetch_calls_for_last_days_for_location(ghl_credential: GHLAuthCredentials, days_ago_start=30, days_ago_end=0):
+def fetch_calls_for_last_days_for_location(ghl_credential: GHLAuthCredentials, days_ago_start=30, days_ago_end=0, days_to_fetch=3):
     """
     Fetch call reports for a specific location.
     """
@@ -257,7 +257,7 @@ def fetch_calls_for_last_days_for_location(ghl_credential: GHLAuthCredentials, d
         return formatted_start_date, formatted_end_date
 
     # Iterate through periods (e.g., last 3 days)
-    for i in range(365*3):
+    for i in range(days_to_fetch):
         # Adjust range as needed (e.g., 0-2 for today, yesterday, day before yesterday)
         days_back_end = i
         days_back_start = i + 2 # Start date is always 2 days before end date
@@ -497,43 +497,86 @@ def fetch_location_wallet_data(ghl_credential):
 def sync_wallet_balance(location_id=None):
     """
     Fetches wallet data and syncs it to the GHLWalletBalance model.
+    Returns a dictionary with sync results for the API response.
     """
+    sync_results = {
+        "status": "success",
+        "message": "Wallet sync completed.",
+        "details": []
+    }
+    processed_count = 0
+    updated_count = 0
+    created_count = 0
+    failed_count = 0
+
     try:
-        # Get the GHLAuthCredentials instance for the given location_id
         if location_id:
             ghl_credentials = [GHLAuthCredentials.objects.get(location_id=location_id)]
+            if not ghl_credentials: # Check if list is empty after .get()
+                 raise GHLAuthCredentials.DoesNotExist
         else:
             ghl_credentials = GHLAuthCredentials.objects.all()
+
+        if not ghl_credentials:
+            sync_results["status"] = "info"
+            sync_results["message"] = "No GHL credentials found to sync."
+            return sync_results
+
     except GHLAuthCredentials.DoesNotExist:
-        print(f"Error: GHLAuthCredentials with location_id '{location_id}' not found. Cannot sync wallet.")
-        return
-    
+        sync_results["status"] = "error"
+        sync_results["message"] = f"Error: GHLAuthCredentials with location_id '{location_id}' not found. Cannot sync wallet."
+        return sync_results
+    except Exception as e:
+        sync_results["status"] = "error"
+        sync_results["message"] = f"An unexpected error occurred while fetching credentials: {e}"
+        return sync_results
+
     for ghl_credential in ghl_credentials:
-        wallet_data = fetch_location_wallet_data(ghl_credential)
+        detail = {
+            "location_id": ghl_credential.location_id,
+            "location_name": ghl_credential.location_name, # Assuming location_name on credential
+            "status": "pending"
+        }
+        try:
+            wallet_data = fetch_location_wallet_data(ghl_credential)
 
-        if wallet_data:
-            # Use transaction.atomic() to ensure database operations are atomic
-            # i.e., either all succeed or all are rolled back.
-            with transaction.atomic():
-                # Get or create the GHLWalletBalance record for this credential
-                # primary_key=True on the OneToOneField means get_or_create needs the PK
-                wallet_balance_obj, created = GHLWalletBalance.objects.get_or_create(
-                    ghl_credential=ghl_credential, # Link to the GHLAuthCredentials instance
-                    defaults={
-                        'current_balance': wallet_data.get("currentBalance"),
-                    }
-                )
+            if wallet_data:
+                with transaction.atomic():
+                    wallet_balance_obj, created = GHLWalletBalance.objects.get_or_create(
+                        ghl_credential=ghl_credential,
+                        defaults={
+                            'current_balance': wallet_data.get("currentBalance")
+                        }
+                    )
 
-                if not created:
-                    # If the object already existed, update its fields
-                    wallet_balance_obj.current_balance = wallet_data.get("currentBalance")
-                    
-                    wallet_balance_obj.save()
-                    print(f"Updated wallet balance for {ghl_credential.location_name}.")
-                else:
-                    print(f"Created new wallet balance record for {ghl_credential.location_name}.")
+                    if not created:
+                        wallet_balance_obj.current_balance = wallet_data.get("currentBalance")
+                        wallet_balance_obj.save()
+                        detail["status"] = "updated"
+                        updated_count += 1
+                        print(f"Updated wallet balance for {ghl_credential.location_name}.")
+                    else:
+                        detail["status"] = "created"
+                        created_count += 1
+                        print(f"Created new wallet balance record for {ghl_credential.location_name}.")
 
-            print(f"\n--- Fetched Wallet Data for {ghl_credential.location_name} ---")
-            print(json.dumps(wallet_data, indent=2)) # Still print the fetched data
-        else:
-            print(f"\nFailed to fetch wallet data for {ghl_credential.location_name}.")
+                detail["message"] = "Successfully synced."
+                detail["current_balance"] = wallet_data.get("currentBalance")
+                processed_count += 1
+            else:
+                detail["status"] = "failed_api_fetch"
+                detail["message"] = "Failed to fetch data from GHL API."
+                failed_count += 1
+        except Exception as e:
+            detail["status"] = "failed_db_save"
+            detail["message"] = f"Error during sync: {e}"
+            failed_count += 1
+            print(f"Error syncing wallet for {ghl_credential.location_name}: {e}")
+
+        sync_results["details"].append(detail)
+
+    sync_results["processed_locations"] = processed_count
+    sync_results["created_records"] = created_count
+    sync_results["updated_records"] = updated_count
+    sync_results["failed_locations"] = failed_count
+    return sync_results
