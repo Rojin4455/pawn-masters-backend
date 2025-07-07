@@ -1372,7 +1372,7 @@ class CompanyAccountView(APIView):
 
     def get(self, request):
         viewtype = request.query_params.get("type")  # Use query_params for GET
-        company_id = request.query_params.get("company_id")
+        # company_id = request.query_params.get("company_id")
 
         if not viewtype:
             return Response(
@@ -1380,9 +1380,9 @@ class CompanyAccountView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if viewtype == "account" and company_id:
+        if viewtype == "account":
             # Return all location accounts for the company
-            accounts = GHLAuthCredentials.objects.filter(company_id=company_id)
+            accounts = GHLAuthCredentials.objects.all()
             serializer = GHLAuthCredentialsShortSerializer(accounts, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
