@@ -15,8 +15,8 @@ from .serializers import (
     AnalyticsRequestSerializer,
     GHLAuthCredentialsSerializer, 
     CompanyNameSearchSerializer,
-    BarGraphAnalyticsRequestSerializer
-
+    BarGraphAnalyticsRequestSerializer,
+    GHLAuthCredentialsShortSerializer
 )
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models.functions import TruncDay, TruncWeek, TruncMonth
@@ -588,6 +588,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
     def get_bar_graph_analytics(self, request):
         """
         Get SMS and Call analytics data formatted for bar graph visualization
+        Supports both Account View (location-based) and Company View (company-based)
         """
         # Validate request payload
         request_serializer = BarGraphAnalyticsRequestSerializer(data=request.data)
@@ -600,24 +601,28 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         validated_data = request_serializer.validated_data
         date_range = validated_data.get('date_range')
         location_ids = validated_data.get('location_ids', [])
+        company_ids = validated_data.get('company_ids', [])  # Add company_ids support
         graph_type = validated_data.get('graph_type', 'daily')  # daily, weekly, monthly
         data_type = validated_data.get('data_type', 'both')  # sms, call, both
+        view_type = validated_data.get('view_type', 'account')  # account, company
 
         try:
             # Build base filters
             base_filters = {}
             if date_range:
                 base_filters['date_range'] = date_range
-            if location_ids:
+            if view_type == 'account' and location_ids:
                 base_filters['location_ids'] = location_ids
+            elif view_type == 'company' and company_ids:
+                base_filters['company_ids'] = company_ids
 
             # Get time-series data based on graph type
             if graph_type == 'daily':
-                data = self._get_daily_analytics(base_filters, data_type)
+                data = self._get_daily_analytics(base_filters, data_type, view_type)
             elif graph_type == 'weekly':
-                data = self._get_weekly_analytics(base_filters, data_type)
+                data = self._get_weekly_analytics(base_filters, data_type, view_type)
             elif graph_type == 'monthly':
-                data = self._get_monthly_analytics(base_filters, data_type)
+                data = self._get_monthly_analytics(base_filters, data_type, view_type)
             else:
                 return Response(
                     {'error': 'Invalid graph_type. Must be daily, weekly, or monthly'},
@@ -625,10 +630,12 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 )
 
             return Response({
+                'view_type': view_type,
                 'graph_type': graph_type,
                 'data_type': data_type,
                 'date_range': date_range,
-                'location_ids': location_ids,
+                'location_ids': location_ids if view_type == 'account' else None,
+                'company_ids': company_ids if view_type == 'company' else None,
                 'data': data
             }, status=status.HTTP_200_OK)
 
@@ -640,10 +647,11 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def _get_daily_analytics(self, filters, data_type):
-        """Get daily analytics data"""
+    def _get_daily_analytics(self, filters, data_type, view_type):
+        """Get daily analytics data for both account and company views"""
         date_range = filters.get('date_range')
         location_ids = filters.get('location_ids', [])
+        company_ids = filters.get('company_ids', [])
         
         # Determine truncation function and date format
         trunc_func = TruncDay('date_added')
@@ -653,7 +661,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         
         if data_type in ['sms', 'both']:
             # Get SMS data
-            sms_queryset = self._build_sms_queryset(filters)
+            sms_queryset = self._build_sms_queryset(filters, view_type)
             sms_data = sms_queryset.annotate(
                 period=trunc_func
             ).values('period').annotate(
@@ -666,7 +674,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             ).order_by('period')
             
             # Calculate usage for SMS
-            sms_usage_data = self._calculate_period_usage(sms_data, 'sms', location_ids)
+            if view_type == 'account':
+                sms_usage_data = self._calculate_period_usage(sms_data, 'sms', location_ids, view_type)
+            else:  # company
+                sms_usage_data = self._calculate_period_usage(sms_data, 'sms', company_ids, view_type)
             
             if data_type == 'sms':
                 data = sms_usage_data
@@ -675,7 +686,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         
         if data_type in ['call', 'both']:
             # Get Call data
-            calls_queryset = self._build_calls_queryset(filters)
+            calls_queryset = self._build_calls_queryset(filters, view_type)
             call_data = calls_queryset.annotate(
                 period=trunc_func
             ).values('period').annotate(
@@ -688,7 +699,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             ).order_by('period')
             
             # Calculate usage for calls
-            call_usage_data = self._calculate_period_usage(call_data, 'call', location_ids)
+            if view_type == 'account':
+                call_usage_data = self._calculate_period_usage(call_data, 'call', location_ids, view_type)
+            else:  # company
+                call_usage_data = self._calculate_period_usage(call_data, 'call', company_ids, view_type)
             
             if data_type == 'call':
                 data = call_usage_data
@@ -698,14 +712,14 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         
         return self._fill_missing_periods(data, filters.get('date_range'), 'daily')
 
-    def _get_weekly_analytics(self, filters, data_type):
-        """Get weekly analytics data"""
+    def _get_weekly_analytics(self, filters, data_type, view_type):
+        """Get weekly analytics data for both account and company views"""
         trunc_func = TruncWeek('date_added')
         
         data = []
         
         if data_type in ['sms', 'both']:
-            sms_queryset = self._build_sms_queryset(filters)
+            sms_queryset = self._build_sms_queryset(filters, view_type)
             sms_data = sms_queryset.annotate(
                 period=trunc_func
             ).values('period').annotate(
@@ -717,7 +731,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
             ).order_by('period')
             
-            sms_usage_data = self._calculate_period_usage(sms_data, 'sms', filters.get('location_ids', []))
+            filter_ids = filters.get('location_ids', []) if view_type == 'account' else filters.get('company_ids', [])
+            sms_usage_data = self._calculate_period_usage(sms_data, 'sms', filter_ids, view_type)
             
             if data_type == 'sms':
                 data = sms_usage_data
@@ -725,7 +740,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 data = sms_usage_data
         
         if data_type in ['call', 'both']:
-            calls_queryset = self._build_calls_queryset(filters)
+            calls_queryset = self._build_calls_queryset(filters, view_type)
             call_data = calls_queryset.annotate(
                 period=trunc_func
             ).values('period').annotate(
@@ -737,7 +752,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 outbound_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
             ).order_by('period')
             
-            call_usage_data = self._calculate_period_usage(call_data, 'call', filters.get('location_ids', []))
+            filter_ids = filters.get('location_ids', []) if view_type == 'account' else filters.get('company_ids', [])
+            call_usage_data = self._calculate_period_usage(call_data, 'call', filter_ids, view_type)
             
             if data_type == 'call':
                 data = call_usage_data
@@ -746,14 +762,15 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         
         return self._fill_missing_periods(data, filters.get('date_range'), 'weekly')
 
-    def _get_monthly_analytics(self, filters, data_type):
-        """Get monthly analytics data"""
+
+    def _get_monthly_analytics(self, filters, data_type, view_type):
+        """Get monthly analytics data for both account and company views"""
         trunc_func = TruncMonth('date_added')
         
         data = []
         
         if data_type in ['sms', 'both']:
-            sms_queryset = self._build_sms_queryset(filters)
+            sms_queryset = self._build_sms_queryset(filters, view_type)
             sms_data = sms_queryset.annotate(
                 period=trunc_func
             ).values('period').annotate(
@@ -765,7 +782,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
             ).order_by('period')
             
-            sms_usage_data = self._calculate_period_usage(sms_data, 'sms', filters.get('location_ids', []))
+            filter_ids = filters.get('location_ids', []) if view_type == 'account' else filters.get('company_ids', [])
+            sms_usage_data = self._calculate_period_usage(sms_data, 'sms', filter_ids, view_type)
             
             if data_type == 'sms':
                 data = sms_usage_data
@@ -773,7 +791,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 data = sms_usage_data
         
         if data_type in ['call', 'both']:
-            calls_queryset = self._build_calls_queryset(filters)
+            calls_queryset = self._build_calls_queryset(filters, view_type)
             call_data = calls_queryset.annotate(
                 period=trunc_func
             ).values('period').annotate(
@@ -785,7 +803,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 outbound_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
             ).order_by('period')
             
-            call_usage_data = self._calculate_period_usage(call_data, 'call', filters.get('location_ids', []))
+            filter_ids = filters.get('location_ids', []) if view_type == 'account' else filters.get('company_ids', [])
+            call_usage_data = self._calculate_period_usage(call_data, 'call', filter_ids, view_type)
             
             if data_type == 'call':
                 data = call_usage_data
@@ -794,8 +813,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         
         return self._fill_missing_periods(data, filters.get('date_range'), 'monthly')
 
-    def _build_sms_queryset(self, filters):
-        """Build SMS queryset with filters"""
+    def _build_sms_queryset(self, filters, view_type):
+        """Build SMS queryset with filters for both account and company views"""
         queryset = TextMessage.objects.select_related('conversation__location').filter(
             conversation__location__is_approved=True
         )
@@ -807,15 +826,19 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 date_added__lte=date_range['end']
             )
         
-        if filters.get('location_ids'):
+        if view_type == 'account' and filters.get('location_ids'):
             queryset = queryset.filter(
                 conversation__location__location_id__in=filters['location_ids']
+            )
+        elif view_type == 'company' and filters.get('company_ids'):
+            queryset = queryset.filter(
+                conversation__location__company_id__in=filters['company_ids']
             )
         
         return queryset
 
-    def _build_calls_queryset(self, filters):
-        """Build calls queryset with filters"""
+    def _build_calls_queryset(self, filters, view_type):
+        """Build calls queryset with filters for both account and company views"""
         queryset = CallReport.objects.select_related('ghl_credential').filter(
             ghl_credential__is_approved=True
         )
@@ -827,24 +850,40 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 date_added__lte=date_range['end']
             )
         
-        if filters.get('location_ids'):
+        if view_type == 'account' and filters.get('location_ids'):
             queryset = queryset.filter(
                 ghl_credential__location_id__in=filters['location_ids']
+            )
+        elif view_type == 'company' and filters.get('company_ids'):
+            queryset = queryset.filter(
+                ghl_credential__company_id__in=filters['company_ids']
             )
         
         return queryset
 
-    def _calculate_period_usage(self, period_data, data_type, location_ids):
-        """Calculate usage costs for each period"""
-        # Get location rates
-        if data_type == 'sms':
-            location_rates = GHLAuthCredentials.objects.filter(
-                location_id__in=location_ids if location_ids else []
-            ).values('location_id', 'inbound_rate', 'outbound_rate')
-        else:  # call
-            location_rates = GHLAuthCredentials.objects.filter(
-                location_id__in=location_ids if location_ids else []
-            ).values('location_id', 'inbound_call_rate', 'outbound_call_rate', 'call_price_ratio')
+    def _calculate_period_usage(self, period_data, data_type, filter_ids, view_type):
+        """Calculate usage costs for each period supporting both account and company views"""
+        # Get location rates based on view type
+        if view_type == 'account':
+            # For account view, filter by location_ids
+            if data_type == 'sms':
+                location_rates = GHLAuthCredentials.objects.filter(
+                    location_id__in=filter_ids if filter_ids else []
+                ).values('location_id', 'inbound_rate', 'outbound_rate')
+            else:  # call
+                location_rates = GHLAuthCredentials.objects.filter(
+                    location_id__in=filter_ids if filter_ids else []
+                ).values('location_id', 'inbound_call_rate', 'outbound_call_rate', 'call_price_ratio')
+        else:  # company view
+            # For company view, filter by company_ids
+            if data_type == 'sms':
+                location_rates = GHLAuthCredentials.objects.filter(
+                    company_id__in=filter_ids if filter_ids else []
+                ).values('location_id', 'inbound_rate', 'outbound_rate')
+            else:  # call
+                location_rates = GHLAuthCredentials.objects.filter(
+                    company_id__in=filter_ids if filter_ids else []
+                ).values('location_id', 'inbound_call_rate', 'outbound_call_rate', 'call_price_ratio')
         
         # Create rates dictionary
         rates_dict = {}
@@ -1322,3 +1361,41 @@ class CallSyncView(APIView):
             fetch_calls_task.delay(credential.id)
 
         return Response({"status": "success", "message": "Call fetching initiated."})
+
+
+
+
+
+
+class CompanyAccountView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        viewtype = request.query_params.get("type")  # Use query_params for GET
+        company_id = request.query_params.get("company_id")
+
+        if not viewtype:
+            return Response(
+                {"error": "Missing 'type' in query parameters."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if viewtype == "account" and company_id:
+            # Return all location accounts for the company
+            accounts = GHLAuthCredentials.objects.filter(company_id=company_id)
+            serializer = GHLAuthCredentialsShortSerializer(accounts, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        elif viewtype == "company":
+            companies = (
+                            GHLAuthCredentials.objects
+                            .values('company_id', 'company_name')
+                            .distinct("company_id")
+                        )
+            return Response(companies, status=status.HTTP_200_OK)
+
+        else:
+            return Response(
+                {"error": "Invalid 'type'. Must be 'account' or 'company'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )

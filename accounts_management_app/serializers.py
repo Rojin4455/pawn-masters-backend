@@ -9,6 +9,7 @@ from rest_framework import serializers
 from django.db.models import Sum, F
 from decimal import Decimal
 from accounts_management_app.models import GHLWalletBalance
+from datetime import datetime, date
 
 
 class GHLAuthCredentialsSerializer(serializers.ModelSerializer):
@@ -27,6 +28,17 @@ class GHLAuthCredentialsSerializer(serializers.ModelSerializer):
             'id',
             'company_id', 'location_id', 'location_name', 'company_name', 'is_approved',
             'category', 'inbound_rate', 'outbound_rate', 'category_id','outbound_call_rate','inbound_call_rate','call_price_ratio'
+        ]
+
+
+
+class GHLAuthCredentialsShortSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = GHLAuthCredentials
+        fields = [
+            'id',
+            'company_id', 'location_id', 'location_name', 'company_name'
         ]
 
 
@@ -278,34 +290,142 @@ class CompanyViewWithCallsSerializer(serializers.Serializer):
 
 
 class BarGraphAnalyticsRequestSerializer(serializers.Serializer):
+    """
+    Serializer for bar graph analytics request payload
+    """
+    GRAPH_TYPE_CHOICES = [
+        ('daily', 'Daily'),
+        ('weekly', 'Weekly'),
+        ('monthly', 'Monthly'),
+    ]
+    
+    DATA_TYPE_CHOICES = [
+        ('sms', 'SMS Only'),
+        ('call', 'Call Only'),
+        ('both', 'Both SMS and Call'),
+    ]
+    
+    VIEW_TYPE_CHOICES = [
+        ('account', 'Account View'),
+        ('company', 'Company View'),
+    ]
+    
+    # Date range filter
     date_range = serializers.DictField(
-        child=serializers.DateField(),
-        required=True,
-        help_text="Date range with 'start' and 'end' keys"
+        required=False,
+        help_text="Date range filter with 'start' and 'end' keys"
     )
+    
+    # Location filter for account view
     location_ids = serializers.ListField(
         child=serializers.CharField(),
         required=False,
-        allow_empty=True,
-        help_text="List of location IDs to filter by"
+        help_text="List of location IDs to filter by (for account view)"
     )
+    
+    # Company filter for company view
+    company_ids = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        help_text="List of company IDs to filter by (for company view)"
+    )
+    
+    # Graph type (daily, weekly, monthly)
     graph_type = serializers.ChoiceField(
-        choices=['daily', 'weekly', 'monthly'],
+        choices=GRAPH_TYPE_CHOICES,
         default='daily',
-        help_text="Type of time period grouping"
+        help_text="Type of graph aggregation"
     )
+    
+    # Data type (sms, call, both)
     data_type = serializers.ChoiceField(
-        choices=['sms', 'call', 'both'],
+        choices=DATA_TYPE_CHOICES,
         default='both',
         help_text="Type of data to include"
     )
     
+    # View type (account, company)
+    view_type = serializers.ChoiceField(
+        choices=VIEW_TYPE_CHOICES,
+        default='account',
+        help_text="Type of view - account (location-based) or company (company-based)"
+    )
+    
     def validate_date_range(self, value):
-        """Validate date range"""
+        """
+        Validate date range format and values
+        """
+        if value is None:
+            return value
+            
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Date range must be a dictionary")
+        
         if 'start' not in value or 'end' not in value:
             raise serializers.ValidationError("Date range must contain 'start' and 'end' keys")
         
-        if value['start'] > value['end']:
-            raise serializers.ValidationError("Start date must be before or equal to end date")
+        try:
+            # Parse dates
+            start_date = datetime.strptime(value['start'], '%Y-%m-%d').date()
+            end_date = datetime.strptime(value['end'], '%Y-%m-%d').date()
+            
+            # Validate date order
+            if start_date > end_date:
+                raise serializers.ValidationError("Start date must be before or equal to end date")
+            
+            return {
+                'start': start_date,
+                'end': end_date
+            }
+        except ValueError:
+            raise serializers.ValidationError("Invalid date format. Use YYYY-MM-DD format")
+    
+    def validate_location_ids(self, value):
+        """
+        Validate location IDs
+        """
+        if value is None:
+            return value
+            
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Location IDs must be a list")
         
-        return value
+        # Remove duplicates and empty values
+        clean_ids = list(set(filter(None, value)))
+        return clean_ids
+    
+    def validate_company_ids(self, value):
+        """
+        Validate company IDs
+        """
+        if value is None:
+            return value
+            
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Company IDs must be a list")
+        
+        # Remove duplicates and empty values
+        clean_ids = list(set(filter(None, value)))
+        return clean_ids
+    
+    def validate(self, attrs):
+        """
+        Cross-field validation
+        """
+        view_type = attrs.get('view_type', 'account')
+        location_ids = attrs.get('location_ids')
+        company_ids = attrs.get('company_ids')
+        
+        # Validate that appropriate IDs are provided for each view type
+        if view_type == 'account':
+            if company_ids:
+                raise serializers.ValidationError(
+                    "company_ids should not be provided for account view"
+                )
+        elif view_type == 'company':
+            if location_ids:
+                raise serializers.ValidationError(
+                    "location_ids should not be provided for company view"
+                )
+        
+        return attrs
