@@ -274,3 +274,38 @@ class CompanyViewWithCallsSerializer(serializers.Serializer):
             "locations_count": obj["locations_count"],
             "total_wallet_balance": round(float(total_wallet_balance), 2) # Round for display
         }
+
+
+
+class BarGraphAnalyticsRequestSerializer(serializers.Serializer):
+    date_range = serializers.DictField(
+        child=serializers.DateField(),
+        required=True,
+        help_text="Date range with 'start' and 'end' keys"
+    )
+    location_ids = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        allow_empty=True,
+        help_text="List of location IDs to filter by"
+    )
+    graph_type = serializers.ChoiceField(
+        choices=['daily', 'weekly', 'monthly'],
+        default='daily',
+        help_text="Type of time period grouping"
+    )
+    data_type = serializers.ChoiceField(
+        choices=['sms', 'call', 'both'],
+        default='both',
+        help_text="Type of data to include"
+    )
+    
+    def validate_date_range(self, value):
+        """Validate date range"""
+        if 'start' not in value or 'end' not in value:
+            raise serializers.ValidationError("Date range must contain 'start' and 'end' keys")
+        
+        if value['start'] > value['end']:
+            raise serializers.ValidationError("Start date must be before or equal to end date")
+        
+        return value

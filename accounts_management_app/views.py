@@ -1,7 +1,5 @@
 from rest_framework import generics, permissions
 from core.models import GHLAuthCredentials,SMSDefaultConfiguration,CallReport
-from .serializers import GHLAuthCredentialsSerializer, CompanyNameSearchSerializer
-
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -14,10 +12,18 @@ from decimal import Decimal
 from .models import TextMessage, CallRecord
 from .serializers import (
     AccountViewSerializer, CompanyViewSerializer, 
-    AnalyticsRequestSerializer
+    AnalyticsRequestSerializer,
+    GHLAuthCredentialsSerializer, 
+    CompanyNameSearchSerializer,
+    BarGraphAnalyticsRequestSerializer
+
 )
 from django.core.exceptions import ObjectDoesNotExist
-
+from django.db.models.functions import TruncDay, TruncWeek, TruncMonth
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+from django.db.models import Count, Sum, Q
+import calendar
 
 
 from django.db import transaction
@@ -574,6 +580,495 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 {'error': f'Failed to fetch usage summary: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+        
+
+
+
+    @action(detail=False, methods=['post'], url_path='bar-graph-analytics')
+    def get_bar_graph_analytics(self, request):
+        """
+        Get SMS and Call analytics data formatted for bar graph visualization
+        """
+        # Validate request payload
+        request_serializer = BarGraphAnalyticsRequestSerializer(data=request.data)
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        validated_data = request_serializer.validated_data
+        date_range = validated_data.get('date_range')
+        location_ids = validated_data.get('location_ids', [])
+        graph_type = validated_data.get('graph_type', 'daily')  # daily, weekly, monthly
+        data_type = validated_data.get('data_type', 'both')  # sms, call, both
+
+        try:
+            # Build base filters
+            base_filters = {}
+            if date_range:
+                base_filters['date_range'] = date_range
+            if location_ids:
+                base_filters['location_ids'] = location_ids
+
+            # Get time-series data based on graph type
+            if graph_type == 'daily':
+                data = self._get_daily_analytics(base_filters, data_type)
+            elif graph_type == 'weekly':
+                data = self._get_weekly_analytics(base_filters, data_type)
+            elif graph_type == 'monthly':
+                data = self._get_monthly_analytics(base_filters, data_type)
+            else:
+                return Response(
+                    {'error': 'Invalid graph_type. Must be daily, weekly, or monthly'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            return Response({
+                'graph_type': graph_type,
+                'data_type': data_type,
+                'date_range': date_range,
+                'location_ids': location_ids,
+                'data': data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Failed to fetch bar graph analytics: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _get_daily_analytics(self, filters, data_type):
+        """Get daily analytics data"""
+        date_range = filters.get('date_range')
+        location_ids = filters.get('location_ids', [])
+        
+        # Determine truncation function and date format
+        trunc_func = TruncDay('date_added')
+        date_format = '%Y-%m-%d'
+        
+        data = []
+        
+        if data_type in ['sms', 'both']:
+            # Get SMS data
+            sms_queryset = self._build_sms_queryset(filters)
+            sms_data = sms_queryset.annotate(
+                period=trunc_func
+            ).values('period').annotate(
+                total_messages=Coalesce(Count('id'), 0),
+                total_segments=Coalesce(Sum('segments'), 0),
+                inbound_messages=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                outbound_messages=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                inbound_segments=Coalesce(Sum('segments', filter=Q(direction='inbound')), 0),
+                outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
+            ).order_by('period')
+            
+            # Calculate usage for SMS
+            sms_usage_data = self._calculate_period_usage(sms_data, 'sms', location_ids)
+            
+            if data_type == 'sms':
+                data = sms_usage_data
+            else:
+                data = sms_usage_data
+        
+        if data_type in ['call', 'both']:
+            # Get Call data
+            calls_queryset = self._build_calls_queryset(filters)
+            call_data = calls_queryset.annotate(
+                period=trunc_func
+            ).values('period').annotate(
+                total_calls=Coalesce(Count('id'), 0),
+                total_duration=Coalesce(Sum('duration'), 0),
+                inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                outbound_calls=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                inbound_duration=Coalesce(Sum('duration', filter=Q(direction='inbound')), 0),
+                outbound_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
+            ).order_by('period')
+            
+            # Calculate usage for calls
+            call_usage_data = self._calculate_period_usage(call_data, 'call', location_ids)
+            
+            if data_type == 'call':
+                data = call_usage_data
+            elif data_type == 'both':
+                # Merge SMS and Call data
+                data = self._merge_sms_call_data(data, call_usage_data)
+        
+        return self._fill_missing_periods(data, filters.get('date_range'), 'daily')
+
+    def _get_weekly_analytics(self, filters, data_type):
+        """Get weekly analytics data"""
+        trunc_func = TruncWeek('date_added')
+        
+        data = []
+        
+        if data_type in ['sms', 'both']:
+            sms_queryset = self._build_sms_queryset(filters)
+            sms_data = sms_queryset.annotate(
+                period=trunc_func
+            ).values('period').annotate(
+                total_messages=Coalesce(Count('id'), 0),
+                total_segments=Coalesce(Sum('segments'), 0),
+                inbound_messages=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                outbound_messages=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                inbound_segments=Coalesce(Sum('segments', filter=Q(direction='inbound')), 0),
+                outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
+            ).order_by('period')
+            
+            sms_usage_data = self._calculate_period_usage(sms_data, 'sms', filters.get('location_ids', []))
+            
+            if data_type == 'sms':
+                data = sms_usage_data
+            else:
+                data = sms_usage_data
+        
+        if data_type in ['call', 'both']:
+            calls_queryset = self._build_calls_queryset(filters)
+            call_data = calls_queryset.annotate(
+                period=trunc_func
+            ).values('period').annotate(
+                total_calls=Coalesce(Count('id'), 0),
+                total_duration=Coalesce(Sum('duration'), 0),
+                inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                outbound_calls=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                inbound_duration=Coalesce(Sum('duration', filter=Q(direction='inbound')), 0),
+                outbound_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
+            ).order_by('period')
+            
+            call_usage_data = self._calculate_period_usage(call_data, 'call', filters.get('location_ids', []))
+            
+            if data_type == 'call':
+                data = call_usage_data
+            elif data_type == 'both':
+                data = self._merge_sms_call_data(data, call_usage_data)
+        
+        return self._fill_missing_periods(data, filters.get('date_range'), 'weekly')
+
+    def _get_monthly_analytics(self, filters, data_type):
+        """Get monthly analytics data"""
+        trunc_func = TruncMonth('date_added')
+        
+        data = []
+        
+        if data_type in ['sms', 'both']:
+            sms_queryset = self._build_sms_queryset(filters)
+            sms_data = sms_queryset.annotate(
+                period=trunc_func
+            ).values('period').annotate(
+                total_messages=Coalesce(Count('id'), 0),
+                total_segments=Coalesce(Sum('segments'), 0),
+                inbound_messages=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                outbound_messages=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                inbound_segments=Coalesce(Sum('segments', filter=Q(direction='inbound')), 0),
+                outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
+            ).order_by('period')
+            
+            sms_usage_data = self._calculate_period_usage(sms_data, 'sms', filters.get('location_ids', []))
+            
+            if data_type == 'sms':
+                data = sms_usage_data
+            else:
+                data = sms_usage_data
+        
+        if data_type in ['call', 'both']:
+            calls_queryset = self._build_calls_queryset(filters)
+            call_data = calls_queryset.annotate(
+                period=trunc_func
+            ).values('period').annotate(
+                total_calls=Coalesce(Count('id'), 0),
+                total_duration=Coalesce(Sum('duration'), 0),
+                inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                outbound_calls=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                inbound_duration=Coalesce(Sum('duration', filter=Q(direction='inbound')), 0),
+                outbound_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
+            ).order_by('period')
+            
+            call_usage_data = self._calculate_period_usage(call_data, 'call', filters.get('location_ids', []))
+            
+            if data_type == 'call':
+                data = call_usage_data
+            elif data_type == 'both':
+                data = self._merge_sms_call_data(data, call_usage_data)
+        
+        return self._fill_missing_periods(data, filters.get('date_range'), 'monthly')
+
+    def _build_sms_queryset(self, filters):
+        """Build SMS queryset with filters"""
+        queryset = TextMessage.objects.select_related('conversation__location').filter(
+            conversation__location__is_approved=True
+        )
+        
+        if filters.get('date_range'):
+            date_range = filters['date_range']
+            queryset = queryset.filter(
+                date_added__gte=date_range['start'],
+                date_added__lte=date_range['end']
+            )
+        
+        if filters.get('location_ids'):
+            queryset = queryset.filter(
+                conversation__location__location_id__in=filters['location_ids']
+            )
+        
+        return queryset
+
+    def _build_calls_queryset(self, filters):
+        """Build calls queryset with filters"""
+        queryset = CallReport.objects.select_related('ghl_credential').filter(
+            ghl_credential__is_approved=True
+        )
+        
+        if filters.get('date_range'):
+            date_range = filters['date_range']
+            queryset = queryset.filter(
+                date_added__gte=date_range['start'],
+                date_added__lte=date_range['end']
+            )
+        
+        if filters.get('location_ids'):
+            queryset = queryset.filter(
+                ghl_credential__location_id__in=filters['location_ids']
+            )
+        
+        return queryset
+
+    def _calculate_period_usage(self, period_data, data_type, location_ids):
+        """Calculate usage costs for each period"""
+        # Get location rates
+        if data_type == 'sms':
+            location_rates = GHLAuthCredentials.objects.filter(
+                location_id__in=location_ids if location_ids else []
+            ).values('location_id', 'inbound_rate', 'outbound_rate')
+        else:  # call
+            location_rates = GHLAuthCredentials.objects.filter(
+                location_id__in=location_ids if location_ids else []
+            ).values('location_id', 'inbound_call_rate', 'outbound_call_rate', 'call_price_ratio')
+        
+        # Create rates dictionary
+        rates_dict = {}
+        for rate in location_rates:
+            location_id = rate['location_id']
+            if data_type == 'sms':
+                rates_dict[location_id] = {
+                    'inbound_rate': rate['inbound_rate'] or Decimal('0.00'),
+                    'outbound_rate': rate['outbound_rate'] or Decimal('0.00')
+                }
+            else:  # call
+                call_price_ratio = rate['call_price_ratio'] or Decimal('1.0')
+                rates_dict[location_id] = {
+                    'inbound_rate': (rate['inbound_call_rate'] or Decimal('0.00')) * call_price_ratio,
+                    'outbound_rate': (rate['outbound_call_rate'] or Decimal('0.00')) * call_price_ratio
+                }
+        
+        # Calculate average rates if multiple locations
+        if rates_dict:
+            avg_inbound_rate = sum(r['inbound_rate'] for r in rates_dict.values()) / len(rates_dict)
+            avg_outbound_rate = sum(r['outbound_rate'] for r in rates_dict.values()) / len(rates_dict)
+        else:
+            avg_inbound_rate = avg_outbound_rate = Decimal('0.00')
+        
+        result = []
+        for item in period_data:
+            period_str = item['period'].strftime('%Y-%m-%d')
+            
+            if data_type == 'sms':
+                inbound_usage = avg_inbound_rate * item['inbound_messages']
+                outbound_usage = avg_outbound_rate * item['outbound_messages']
+                
+                result.append({
+                    'period': period_str,
+                    'period_date': item['period'],
+                    'sms_data': {
+                        'total_messages': item['total_messages'],
+                        'total_segments': item['total_segments'],
+                        'inbound_messages': item['inbound_messages'],
+                        'outbound_messages': item['outbound_messages'],
+                        'inbound_segments': item['inbound_segments'],
+                        'outbound_segments': item['outbound_segments'],
+                        'inbound_usage': float(inbound_usage),
+                        'outbound_usage': float(outbound_usage),
+                        'total_usage': float(inbound_usage + outbound_usage)
+                    }
+                })
+            else:  # call
+                # Convert duration to minutes
+                inbound_minutes = Decimal(str(item['inbound_duration'])) / Decimal('60')
+                outbound_minutes = Decimal(str(item['outbound_duration'])) / Decimal('60')
+                
+                inbound_usage = avg_inbound_rate * inbound_minutes
+                outbound_usage = avg_outbound_rate * outbound_minutes
+                
+                result.append({
+                    'period': period_str,
+                    'period_date': item['period'],
+                    'call_data': {
+                        'total_calls': item['total_calls'],
+                        'total_duration': item['total_duration'],
+                        'inbound_calls': item['inbound_calls'],
+                        'outbound_calls': item['outbound_calls'],
+                        'inbound_duration': item['inbound_duration'],
+                        'outbound_duration': item['outbound_duration'],
+                        'inbound_minutes': float(inbound_minutes),
+                        'outbound_minutes': float(outbound_minutes),
+                        'inbound_usage': float(inbound_usage),
+                        'outbound_usage': float(outbound_usage),
+                        'total_usage': float(inbound_usage + outbound_usage)
+                    }
+                })
+        
+        return result
+
+    def _merge_sms_call_data(self, sms_data, call_data):
+        """Merge SMS and call data for combined view"""
+        # Create dictionaries for quick lookup
+        sms_dict = {item['period']: item for item in sms_data}
+        call_dict = {item['period']: item for item in call_data}
+        
+        # Get all unique periods
+        all_periods = set(sms_dict.keys()) | set(call_dict.keys())
+        
+        merged_data = []
+        for period in sorted(all_periods):
+            sms_item = sms_dict.get(period, {})
+            call_item = call_dict.get(period, {})
+            
+            # Get period_date from either SMS or call data
+            period_date = sms_item.get('period_date') or call_item.get('period_date')
+            
+            merged_item = {
+                'period': period,
+                'period_date': period_date,
+            }
+            
+            # Add SMS data if available
+            if 'sms_data' in sms_item:
+                merged_item['sms_data'] = sms_item['sms_data']
+            else:
+                merged_item['sms_data'] = {
+                    'total_messages': 0,
+                    'total_segments': 0,
+                    'inbound_messages': 0,
+                    'outbound_messages': 0,
+                    'inbound_segments': 0,
+                    'outbound_segments': 0,
+                    'inbound_usage': 0.0,
+                    'outbound_usage': 0.0,
+                    'total_usage': 0.0
+                }
+            
+            # Add call data if available
+            if 'call_data' in call_item:
+                merged_item['call_data'] = call_item['call_data']
+            else:
+                merged_item['call_data'] = {
+                    'total_calls': 0,
+                    'total_duration': 0,
+                    'inbound_calls': 0,
+                    'outbound_calls': 0,
+                    'inbound_duration': 0,
+                    'outbound_duration': 0,
+                    'inbound_minutes': 0.0,
+                    'outbound_minutes': 0.0,
+                    'inbound_usage': 0.0,
+                    'outbound_usage': 0.0,
+                    'total_usage': 0.0
+                }
+            
+            # Add combined usage
+            merged_item['combined_usage'] = {
+                'total_inbound_usage': merged_item['sms_data']['inbound_usage'] + merged_item['call_data']['inbound_usage'],
+                'total_outbound_usage': merged_item['sms_data']['outbound_usage'] + merged_item['call_data']['outbound_usage'],
+                'total_usage': merged_item['sms_data']['total_usage'] + merged_item['call_data']['total_usage']
+            }
+            
+            merged_data.append(merged_item)
+        
+        return merged_data
+
+    def _fill_missing_periods(self, data, date_range, period_type):
+        """Fill missing periods with zero values"""
+        if not date_range or not data:
+            return data
+        
+        start_date = date_range['start']
+        end_date = date_range['end']
+        
+        # Create a set of existing periods
+        existing_periods = {item['period'] for item in data}
+        
+        # Generate all periods in the range
+        all_periods = []
+        current_date = start_date
+        
+        while current_date <= end_date:
+            if period_type == 'daily':
+                period_str = current_date.strftime('%Y-%m-%d')
+                next_date = current_date + timedelta(days=1)
+            elif period_type == 'weekly':
+                # Get start of week (Monday)
+                start_of_week = current_date - timedelta(days=current_date.weekday())
+                period_str = start_of_week.strftime('%Y-%m-%d')
+                next_date = start_of_week + timedelta(weeks=1)
+                current_date = next_date
+            else:  # monthly
+                period_str = current_date.strftime('%Y-%m-%d')
+                next_date = current_date + relativedelta(months=1)
+            
+            if period_str not in existing_periods:
+                # Create empty period data
+                empty_period = {
+                    'period': period_str,
+                    'period_date': current_date,
+                }
+                
+                # Add appropriate empty data structure
+                if any('sms_data' in item for item in data):
+                    empty_period['sms_data'] = {
+                        'total_messages': 0,
+                        'total_segments': 0,
+                        'inbound_messages': 0,
+                        'outbound_messages': 0,
+                        'inbound_segments': 0,
+                        'outbound_segments': 0,
+                        'inbound_usage': 0.0,
+                        'outbound_usage': 0.0,
+                        'total_usage': 0.0
+                    }
+                
+                if any('call_data' in item for item in data):
+                    empty_period['call_data'] = {
+                        'total_calls': 0,
+                        'total_duration': 0,
+                        'inbound_calls': 0,
+                        'outbound_calls': 0,
+                        'inbound_duration': 0,
+                        'outbound_duration': 0,
+                        'inbound_minutes': 0.0,
+                        'outbound_minutes': 0.0,
+                        'inbound_usage': 0.0,
+                        'outbound_usage': 0.0,
+                        'total_usage': 0.0
+                    }
+                
+                if any('combined_usage' in item for item in data):
+                    empty_period['combined_usage'] = {
+                        'total_inbound_usage': 0.0,
+                        'total_outbound_usage': 0.0,
+                        'total_usage': 0.0
+                    }
+                
+                all_periods.append(empty_period)
+            
+            current_date = next_date
+        
+        # Combine existing and empty periods, then sort
+        combined_data = data + all_periods
+        combined_data.sort(key=lambda x: x['period'])
+        
+        return combined_data
+
 
 class SMSConfigurationViewSet(viewsets.GenericViewSet):
     """
