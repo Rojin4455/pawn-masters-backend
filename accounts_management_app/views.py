@@ -655,8 +655,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         date_range = filters.get('date_range')
         location_ids = filters.get('location_ids', [])
         company_ids = filters.get('company_ids', [])
-        if filters in "category_id":
-            category_id = filters.get('category_id')
+
         
         # Determine truncation function and date format
         trunc_func = TruncDay('date_added')
@@ -823,6 +822,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         queryset = TextMessage.objects.select_related('conversation__location').filter(
             conversation__location__is_approved=True
         )
+
+        category_id = filters.get("category_id")
+        if category_id:
+            queryset = queryset.filter(conversation__location__category__id=category_id)
         
         if filters.get('date_range'):
             date_range = filters['date_range']
@@ -847,6 +850,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         queryset = CallReport.objects.select_related('ghl_credential').filter(
             ghl_credential__is_approved=True
         )
+
+        category_id = filters.get("category_id")
+        if category_id:
+            queryset = queryset.filter(conversation__location__category__id=category_id)
         
         if filters.get('date_range'):
             date_range = filters['date_range']
