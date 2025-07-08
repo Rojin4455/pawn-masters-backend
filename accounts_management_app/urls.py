@@ -3,7 +3,8 @@ from .views import (
     GHLAuthCredentialsListView,
     GHLAuthCredentialsDetailUpdateDeleteView,
     SMSConfigurationViewSet,SMSAnalyticsViewSet, webhook_handler,
-    WalletSyncView,CallSyncView,CompanyAccountView
+    WalletSyncView,CallSyncView,CompanyAccountView,
+    AccountDataForCompanyView
 )
 
 from rest_framework.routers import DefaultRouter
@@ -20,4 +21,5 @@ urlpatterns = [
     path('sync-wallets/', WalletSyncView.as_view(), name='sync-wallets'),
     path('sync-calls/', CallSyncView.as_view(), name='sync-calls'),
     path('get-company-account/', CompanyAccountView.as_view()),
+    path('get-company-account-only/', AccountDataForCompanyView.as_view()),
 ]

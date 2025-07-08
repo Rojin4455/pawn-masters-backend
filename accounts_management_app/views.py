@@ -606,9 +606,12 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         data_type = validated_data.get('data_type', 'both')  # sms, call, both
         view_type = validated_data.get('view_type', 'account')  # account, company
 
+        category_id = validated_data.get('category_id',0)  # account, company
         try:
             # Build base filters
             base_filters = {}
+            if category_id:
+                base_filters["category_id"] = category_id
             if date_range:
                 base_filters['date_range'] = date_range
             if view_type == 'account' and location_ids:
@@ -652,6 +655,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         date_range = filters.get('date_range')
         location_ids = filters.get('location_ids', [])
         company_ids = filters.get('company_ids', [])
+        if filters in "category_id":
+            category_id = filters.get('category_id')
         
         # Determine truncation function and date format
         trunc_func = TruncDay('date_added')
@@ -1400,3 +1405,27 @@ class CompanyAccountView(APIView):
                 {"error": "Invalid 'type'. Must be 'account' or 'company'."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+
+
+
+
+
+class AccountDataForCompanyView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        company_id = request.query_params.get("company_id")  # Use query_params for GET
+        # company_id = request.query_params.get("company_id")
+
+        if not company_id:
+            return Response(
+                {"error": "Missing 'company_id' in query parameters."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        accounts = GHLAuthCredentials.objects.filter(company_id=company_id)
+        serializer = GHLAuthCredentialsShortSerializer(accounts, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+        

@@ -322,6 +322,11 @@ class BarGraphAnalyticsRequestSerializer(serializers.Serializer):
         required=False,
         help_text="List of location IDs to filter by (for account view)"
     )
+
+    category_id = serializers.CharField(
+        required=False,
+        help_text="filter by category"
+    )
     
     # Company filter for company view
     company_ids = serializers.ListField(
