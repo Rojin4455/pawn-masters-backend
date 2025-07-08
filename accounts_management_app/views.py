@@ -1302,9 +1302,10 @@ class WalletSyncView(APIView):
     """
     def get(self, request, *args, **kwargs):
         location_id = request.query_params.get('location_id')
+        company_id = request.query_params.get('company_id')
 
         # Pass the location_id to your sync function
-        sync_result = sync_wallet_balance(location_id=location_id)
+        sync_result = sync_wallet_balance(location_id=location_id, company_id=company_id)
 
         # Determine HTTP status based on overall sync status
         http_status = status.HTTP_200_OK

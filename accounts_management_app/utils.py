@@ -494,7 +494,7 @@ def fetch_location_wallet_data(ghl_credential):
     return None
 
 
-def sync_wallet_balance(location_id=None):
+def sync_wallet_balance(location_id=None, company_id=None):
     """
     Fetches wallet data and syncs it to the GHLWalletBalance model.
     Returns a dictionary with sync results for the API response.
@@ -514,8 +514,12 @@ def sync_wallet_balance(location_id=None):
             ghl_credentials = [GHLAuthCredentials.objects.get(location_id=location_id)]
             if not ghl_credentials: # Check if list is empty after .get()
                  raise GHLAuthCredentials.DoesNotExist
+        
         else:
-            ghl_credentials = GHLAuthCredentials.objects.all()
+            if company_id:
+                ghl_credentials = GHLAuthCredentials.objects.filter(company_id=company_id)
+            else:
+                ghl_credentials = GHLAuthCredentials.objects.all()
 
         if not ghl_credentials:
             sync_results["status"] = "info"
