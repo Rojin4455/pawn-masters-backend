@@ -1435,4 +1435,18 @@ class AccountDataForCompanyView(APIView):
         serializer = GHLAuthCredentialsShortSerializer(accounts, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-        
+
+from rest_framework.decorators import api_view
+
+from accounts_management_app.tasks import refresh_all_sync_call_for_last_750_day
+@api_view(['POST'])
+def trigger_refresh_calls_task(request):
+    """
+    POST /api/refresh-calls/
+    Trigger the Celery task to refresh calls for all GHL locations (last 750 days).
+    """
+    refresh_all_sync_call_for_last_750_day.delay()  # run in background
+    return Response(
+        {"message": "Task to refresh calls for the last 750 days has been triggered."},
+        status=status.HTTP_202_ACCEPTED
+    )
