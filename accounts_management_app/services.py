@@ -542,7 +542,7 @@ def sync_conversations_with_messages(location_id):
                 print(f"Fallback also failed: {fallback_e}")
                 return
             
-    # save_conversations_with_messges(location_id, access_token)
+    save_conversations_with_messges(location_id, access_token)
     
 
 

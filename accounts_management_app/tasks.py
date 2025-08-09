@@ -66,3 +66,22 @@ def refresh_all_sync_call_for_last_750_day():
         print(f"\n--- Processing location: {credential.location_name} (ID: {credential.location_id}) ---")
         fetch_calls_for_last_days_for_location(credential,days_to_fetch=750)
         print(f"--- Finished processing for {credential.location_name} ---\n")
+
+
+@shared_task
+def refresh_all_sync_conversation_messages():
+    # sync_wallet_balance()
+    # process_all_ghl_locations_for_calls()
+    """
+    Fetches calls for all GHL locations configured in the database.
+    """
+    ghl_credentials = GHLAuthCredentials.objects.all()
+    if not ghl_credentials.exists():
+        print("No GHLAuthCredentials found in the database. Please add locations.")
+        return
+
+    for credential in ghl_credentials:
+        # if credential.location_id in ['jl8fn7mpZ2UUZ6ZCOus8']:
+        print(f"\n--- Processing location: {credential.location_name} (ID: {credential.location_id}) ---")
+        fetch_calls_for_last_days_for_location(credential,days_to_fetch=750)
+        print(f"--- Finished processing for {credential.location_name} ---\n")

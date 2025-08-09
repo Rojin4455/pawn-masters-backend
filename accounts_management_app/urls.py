@@ -4,7 +4,7 @@ from .views import (
     GHLAuthCredentialsDetailUpdateDeleteView,
     SMSConfigurationViewSet,SMSAnalyticsViewSet, webhook_handler,
     WalletSyncView,CallSyncView,CompanyAccountView,
-    AccountDataForCompanyView,trigger_refresh_calls_task
+    AccountDataForCompanyView,trigger_refresh_calls_task,trigger_refresh_conversations_task
 )
 
 from rest_framework.routers import DefaultRouter
@@ -23,5 +23,6 @@ urlpatterns = [
     path('get-company-account/', CompanyAccountView.as_view()),
     path('get-company-account-only/', AccountDataForCompanyView.as_view()),
     path('refresh-calls/', trigger_refresh_calls_task, name='trigger-refresh-calls'),
+    path('refresh-messages/', trigger_refresh_conversations_task, name='trigger-refresh-calls'),
 
 ]

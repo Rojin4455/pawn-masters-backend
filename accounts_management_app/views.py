@@ -1437,6 +1437,7 @@ class AccountDataForCompanyView(APIView):
 
 
 from rest_framework.decorators import api_view
+from core.tasks import async_sync_conversations_with_messages
 
 from accounts_management_app.tasks import refresh_all_sync_call_for_last_750_day
 @api_view(['POST'])
@@ -1446,6 +1447,43 @@ def trigger_refresh_calls_task(request):
     Trigger the Celery task to refresh calls for all GHL locations (last 750 days).
     """
     refresh_all_sync_call_for_last_750_day.delay()  # run in background
+    
+    return Response(
+        {"message": "Task to refresh calls for the last 750 days has been triggered."},
+        status=status.HTTP_202_ACCEPTED
+    )
+
+
+@api_view(['POST'])
+def trigger_refresh_conversations_task(request):
+    """
+    POST /api/refresh-calls/
+    Trigger the Celery task to refresh calls for all GHL locations (last 750 days).
+    If location_id is provided, refresh only that location.
+    """
+    location_id = request.GET.get("location_id")
+    print("locationID: ", location_id)
+
+    if location_id:
+        try:
+            token = GHLAuthCredentials.objects.get(location_id=location_id)
+            async_sync_conversations_with_messages.delay(location_id, token.access_token)
+        except GHLAuthCredentials.DoesNotExist:
+            return Response(
+                {"error": f"No credentials found for location_id {location_id}"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    else:
+        # Loop through all locations
+        credentials = GHLAuthCredentials.objects.all()
+        if not credentials.exists():
+            return Response(
+                {"error": "No GHL credentials found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        for cred in credentials:
+            async_sync_conversations_with_messages(cred.location_id, cred.access_token)
+
     return Response(
         {"message": "Task to refresh calls for the last 750 days has been triggered."},
         status=status.HTTP_202_ACCEPTED
