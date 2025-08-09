@@ -1482,7 +1482,7 @@ def trigger_refresh_conversations_task(request):
                 status=status.HTTP_404_NOT_FOUND
             )
         for cred in credentials:
-            async_sync_conversations_with_messages(cred.location_id, cred.access_token)
+            async_sync_conversations_with_messages.delay(cred.location_id, cred.access_token)
 
     return Response(
         {"message": "Task to refresh calls for the last 750 days has been triggered."},
