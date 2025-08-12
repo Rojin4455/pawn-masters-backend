@@ -74,11 +74,44 @@ class GHLAuthCredentialsDetailUpdateDeleteView(generics.RetrieveUpdateDestroyAPI
 
 
 
+from rest_framework.pagination import PageNumberPagination
 
+class CustomPageNumberPagination(PageNumberPagination):
+    """
+    Custom pagination class to set page size and include additional metadata.
+    """
+    page_size = 10  # Set the default page size to 15 records
+    page_size_query_param = 'page_size'  # Allow client to override page size using ?page_size=X
+    max_page_size = 1000  # Maximum page size allowed
 
+    def get_paginated_response(self, data):
+        """
+        Overrides the default get_paginated_response to include custom metadata.
+        The custom metadata (view_type, filters_applied, total_results_count, etc.)
+        is expected to be set on the request object by the view.
+        """
+        custom_metadata = getattr(self.request, 'custom_metadata', {})
+
+        return Response({
+            'count': self.page.paginator.count,  # Total number of items across all pages
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            # Include custom metadata from the view
+            'view_type': custom_metadata.get('view_type'),
+            'filters_applied': custom_metadata.get('filters_applied'),
+            'graph_type': custom_metadata.get('graph_type'),
+            'data_type': custom_metadata.get('data_type'),
+            'date_range': custom_metadata.get('date_range'),
+            'location_ids': custom_metadata.get('location_ids'),
+            'company_ids': custom_metadata.get('company_ids'),
+            'total_results_count': custom_metadata.get('total_results_count'), # Total count before pagination
+            'data': data  # The paginated list of results for the current page
+        })
 
 
 class SMSAnalyticsViewSet(viewsets.GenericViewSet):
+    pagination_class = CustomPageNumberPagination
+
     """
     ViewSet for SMS and Call usage analytics with optimized queries
     """
@@ -502,10 +535,8 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         # Validate request payload
         request_serializer = AnalyticsRequestSerializer(data=request.data)
         if not request_serializer.is_valid():
-            return Response(
-                request_serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response(request_serializer.errors,
+                            status=status.HTTP_400_BAD_REQUEST)
 
         validated_data = request_serializer.validated_data
         view_type = validated_data.get('view_type', 'account')
@@ -518,22 +549,35 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         try:
             if view_type == 'account':
                 data = self.get_account_view_data(filters)
-                serializer = AccountViewWithCallsSerializer(data, many=True)
+                serializer_class = AccountViewWithCallsSerializer
             else:  # company view
                 data = self.get_company_view_data(filters)
-                serializer = CompanyViewWithCallsSerializer(data, many=True)
+                serializer_class = CompanyViewWithCallsSerializer
 
-            return Response({
+            # Store custom metadata on the request object for the paginator to access
+            request.custom_metadata = {
                 'view_type': view_type,
                 'filters_applied': {k: v for k, v in filters.items() if v is not None},
-                'results_count': len(data),
-                'data': serializer.data
-            }, status=status.HTTP_200_OK)
+                'total_results_count': len(data), # Total count before pagination
+            }
+
+            # Apply pagination to the data list
+            page = self.paginate_queryset(data)
+
+            if page is not None:
+                serializer = serializer_class(page, many=True)
+                return self.get_paginated_response(serializer.data)
+            else:
+                serializer = serializer_class(data, many=True)
+                return Response({
+                    'view_type': view_type,
+                    'filters_applied': {k: v for k, v in filters.items() if v is not None},
+                    'results_count': len(data),
+                    'data': serializer.data
+                }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            # It's good practice to log the full traceback in a real application
-            import traceback
-            traceback.print_exc() # Print traceback for debugging
+            # traceback.print_exc() # Print traceback for debugging
             return Response(
                 {'error': f'Failed to fetch analytics data: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1487,4 +1531,19 @@ def trigger_refresh_conversations_task(request):
     return Response(
         {"message": "Task to refresh calls for the last 750 days has been triggered."},
         status=status.HTTP_202_ACCEPTED
+    )
+
+
+from core.tasks import make_api_call
+@api_view(['GET'])
+def make_api_call_view(request):
+    """
+    POST /api/refresh-calls/
+    Trigger the Celery task to refresh calls for all GHL locations (last 750 days).
+    """
+    make_api_call.delay()  # run in background
+    
+    return Response(
+        {"message": "Api refresh task initiated for last days"},
+        status=status.HTTP_200_OK
     )
