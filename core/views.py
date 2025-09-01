@@ -175,3 +175,52 @@ class LogoutView(APIView):
 
 # print("segmants:    ",math.ceil(len(text.body) / 160))
 # print(text.conversation.contact.phone)
+
+
+
+
+from django.http import JsonResponse
+from django.views import View
+from celery import group
+from .models import GHLAuthCredentials
+from .tasks import (
+    async_fetch_all_contacts,
+    async_sync_conversations_with_messages,
+    async_sync_conversations_with_calls,
+)
+
+
+class RefetchAllLocationsView(View):
+    """
+    Endpoint to manually trigger re-fetching of contacts, conversations, and calls
+    for ALL approved GHLAuthCredentials locations.
+    """
+
+    def post(self, request, *args, **kwargs):
+        # Only run for approved locations
+        credentials = GHLAuthCredentials.objects.filter(is_approved=True)
+
+        if not credentials.exists():
+            return JsonResponse({"status": "error", "message": "No approved locations found."}, status=404)
+
+        all_groups = []
+
+        for cred in credentials:
+            tasks_to_run = []
+
+            # Always re-run tasks regardless of flags, since this is a manual refetch
+            tasks_to_run.append(async_fetch_all_contacts.si(cred.location_id, cred.access_token))
+            tasks_to_run.append(async_sync_conversations_with_messages.si(cred.location_id, cred.access_token))
+            tasks_to_run.append(async_sync_conversations_with_calls.si(cred.location_id, cred.access_token))
+
+            all_groups.append(group(tasks_to_run))
+
+        # Flatten into a single group and dispatch
+        master_group = group(all_groups)
+        async_result = master_group.apply_async()
+
+        return JsonResponse({
+            "status": "success",
+            "message": f"Triggered refetch for {credentials.count()} locations.",
+            "task_id": async_result.id,
+        })

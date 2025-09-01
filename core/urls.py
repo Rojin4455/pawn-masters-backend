@@ -20,4 +20,6 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='logout'),
     # path('user/', UserView.as_view(), name='user'),
     # path('register/', RegisterView.as_view(), name='register'),
+    path("refetch-all/", RefetchAllLocationsView.as_view(), name="refetch-all"),
+
 ]

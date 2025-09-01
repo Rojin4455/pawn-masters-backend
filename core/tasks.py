@@ -13,30 +13,33 @@ def make_api_call():
     
         print("credentials tokenL", credentials)
         refresh_token = credentials.refresh_token
+        try:
 
         
-        response = requests.post('https://services.leadconnectorhq.com/oauth/token', data={
-            'grant_type': 'refresh_token',
-            'client_id': config("GHL_CLIENT_ID"),
-            'client_secret': config("GHL_CLIENT_SECRET"),
-            'refresh_token': refresh_token
-        })
-        
-        new_tokens = response.json()
-        obj, created = GHLAuthCredentials.objects.update_or_create(
-                location_id= new_tokens.get("locationId"),
-                defaults={
-                    "access_token": new_tokens.get("access_token"),
-                    "refresh_token": new_tokens.get("refresh_token"),
-                    "expires_in": new_tokens.get("expires_in"),
-                    "scope": new_tokens.get("scope"),
-                    "user_type": new_tokens.get("userType"),
-                    "company_id": new_tokens.get("companyId"),
-                    "user_id":new_tokens.get("userId"),
+            response = requests.post('https://services.leadconnectorhq.com/oauth/token', data={
+                'grant_type': 'refresh_token',
+                'client_id': config("GHL_CLIENT_ID"),
+                'client_secret': config("GHL_CLIENT_SECRET"),
+                'refresh_token': refresh_token
+            })
+            
+            new_tokens = response.json()
+            obj, created = GHLAuthCredentials.objects.update_or_create(
+                    location_id= new_tokens.get("locationId"),
+                    defaults={
+                        "access_token": new_tokens.get("access_token"),
+                        "refresh_token": new_tokens.get("refresh_token"),
+                        "expires_in": new_tokens.get("expires_in"),
+                        "scope": new_tokens.get("scope"),
+                        "user_type": new_tokens.get("userType"),
+                        "company_id": new_tokens.get("companyId"),
+                        "user_id":new_tokens.get("userId"),
 
-                }
-            )
-        print("refreshed: ", obj)
+                    }
+                )
+            print("refreshed: ", obj)
+        except:
+            continue
 
 
 
@@ -52,5 +55,5 @@ def async_sync_conversations_with_messages(location_id, access_token):
 @shared_task
 def async_sync_conversations_with_calls(location_id, access_token):
     credential = GHLAuthCredentials.objects.get(location_id = location_id)
-    fetch_calls_for_last_days_for_location(credential,days_to_fetch=365*3)
+    fetch_calls_for_last_days_for_location(credential,days_to_fetch=365*5)
     # save_conversations_with_calls(location_id)

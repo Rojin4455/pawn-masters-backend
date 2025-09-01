@@ -238,6 +238,6 @@ from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
     'make-api-call-every-minute': {
         'task': 'core.tasks.make_api_call',
-        'schedule': timedelta(hours=10)
+        'schedule': timedelta(minutes=1)
     },
 }
