@@ -218,9 +218,11 @@ class RefetchAllLocationsView(View):
             log = LocationSyncLog.objects.create(location=cred, status="pending")
 
             # Pass log.id so we can update it when finished
-            all_groups.append(
-                chord(tasks_to_run)(mark_location_synced.s(cred.location_id, log.id))
-            )
+            c = chord(tasks_to_run)(mark_location_synced.s(cred.location_id, log.id))
+            all_groups.append(c)
+            # all_groups.append(
+            #     chord(tasks_to_run)(mark_location_synced.s(cred.location_id, log.id))
+            # )
 
         # Flatten into a single group and dispatch
         master_group = group(all_groups)
