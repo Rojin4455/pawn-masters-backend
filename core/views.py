@@ -182,12 +182,14 @@ class LogoutView(APIView):
 from django.http import JsonResponse
 from django.views import View
 from celery import group
-from .models import GHLAuthCredentials
+from .models import GHLAuthCredentials,LocationSyncLog
 from .tasks import (
     async_fetch_all_contacts,
     async_sync_conversations_with_messages,
-    async_sync_conversations_with_calls,
+    async_sync_conversations_with_calls,mark_location_synced
 )
+from celery import chord
+
 
 
 class RefetchAllLocationsView(View):
@@ -206,14 +208,19 @@ class RefetchAllLocationsView(View):
         all_groups = []
 
         for cred in credentials:
-            tasks_to_run = []
+            tasks_to_run = [
+                async_fetch_all_contacts.si(cred.location_id, cred.access_token),
+                async_sync_conversations_with_messages.si(cred.location_id, cred.access_token),
+                async_sync_conversations_with_calls.si(cred.location_id, cred.access_token),
+            ]
 
-            # Always re-run tasks regardless of flags, since this is a manual refetch
-            tasks_to_run.append(async_fetch_all_contacts.si(cred.location_id, cred.access_token))
-            tasks_to_run.append(async_sync_conversations_with_messages.si(cred.location_id, cred.access_token))
-            tasks_to_run.append(async_sync_conversations_with_calls.si(cred.location_id, cred.access_token))
+            # Create a pending log entry for this sync run
+            log = LocationSyncLog.objects.create(location=cred, status="pending")
 
-            all_groups.append(group(tasks_to_run))
+            # Pass log.id so we can update it when finished
+            all_groups.append(
+                chord(tasks_to_run)(mark_location_synced.s(cred.location_id, log.id))
+            )
 
         # Flatten into a single group and dispatch
         master_group = group(all_groups)

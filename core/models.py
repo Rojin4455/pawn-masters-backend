@@ -122,6 +122,19 @@ class SMSDefaultConfiguration(models.Model):
 
 
 
+class LocationSyncLog(models.Model):
+    location = models.ForeignKey(GHLAuthCredentials, on_delete=models.CASCADE, related_name="sync_logs")
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("pending", "Pending"),
+            ("success", "Success"),
+            ("failed", "Failed"),
+        ],
+        default="pending",
+    )
 
 
 class FirebaseToken(models.Model):

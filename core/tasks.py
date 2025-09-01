@@ -1,9 +1,11 @@
 import requests
 from celery import shared_task
-from core.models import GHLAuthCredentials
+from core.models import GHLAuthCredentials,LocationSyncLog
 from decouple import config
 from accounts_management_app.utils import fetch_calls_for_last_days_for_location
 from accounts_management_app.services import fetch_all_contacts, sync_conversations_with_messages
+from django.utils import timezone
+
 
 @shared_task
 def make_api_call():
@@ -57,3 +59,19 @@ def async_sync_conversations_with_calls(location_id, access_token):
     credential = GHLAuthCredentials.objects.get(location_id = location_id)
     fetch_calls_for_last_days_for_location(credential,days_to_fetch=365*5)
     # save_conversations_with_calls(location_id)
+
+
+@shared_task
+def mark_location_synced(location_id, log_id):
+    try:
+        log = LocationSyncLog.objects.get(id=log_id)
+        log.finished_at = timezone.now()
+        log.status = "success"
+        log.save()
+    except Exception:
+        # Fallback if log not found
+        LocationSyncLog.objects.filter(id=log_id).update(
+            finished_at=timezone.now(),
+            status="failed"
+        )
+        raise
