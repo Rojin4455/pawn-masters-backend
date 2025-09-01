@@ -205,8 +205,9 @@ class RefetchAllLocationsView(View):
         if not credentials.exists():
             return JsonResponse({"status": "error", "message": "No approved locations found."}, status=404)
 
-        all_groups = []
-
+        # Option 1: Execute chords individually (recommended)
+        chord_results = []
+        
         for cred in credentials:
             tasks_to_run = [
                 async_fetch_all_contacts.si(cred.location_id, cred.access_token),
@@ -217,19 +218,12 @@ class RefetchAllLocationsView(View):
             # Create a pending log entry for this sync run
             log = LocationSyncLog.objects.create(location=cred, status="pending")
 
-            # Pass log.id so we can update it when finished
-            c = chord(tasks_to_run)(mark_location_synced.s(cred.location_id, log.id))
-            all_groups.append(c)
-            # all_groups.append(
-            #     chord(tasks_to_run)(mark_location_synced.s(cred.location_id, log.id))
-            # )
-
-        # Flatten into a single group and dispatch
-        master_group = group(all_groups)
-        async_result = master_group.apply_async()
+            # Execute chord and store result
+            chord_result = chord(tasks_to_run)(mark_location_synced.s(cred.location_id, log.id))
+            chord_results.append(chord_result)
 
         return JsonResponse({
             "status": "success",
             "message": f"Triggered refetch for {credentials.count()} locations.",
-            "task_id": async_result.id,
+            "chord_ids": [str(result.id) for result in chord_results],
         })
