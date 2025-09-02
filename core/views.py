@@ -200,7 +200,7 @@ class RefetchAllLocationsView(View):
     """
     def post(self, request, *args, **kwargs):
         # Get approved locations
-        credentials = GHLAuthCredentials.objects.filter(is_approved=True)[:10]  # Increased to 10 for testing
+        credentials = GHLAuthCredentials.objects.filter(is_approved=True)  # Increased to 10 for testing
         
         if not credentials.exists():
             return JsonResponse({"status": "error", "message": "No approved locations found."}, status=404)
