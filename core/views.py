@@ -188,42 +188,56 @@ from .tasks import (
     async_sync_conversations_with_messages,
     async_sync_conversations_with_calls,mark_location_synced
 )
-from celery import chord
+from django.utils import timezone
+from celery import chain, group
+
 
 
 
 class RefetchAllLocationsView(View):
     """
     Endpoint to manually trigger re-fetching of contacts, conversations, and calls
-    for ALL approved GHLAuthCredentials locations.
+    for ALL approved GHLAuthCredentials locations in sequential order.
     """
 
     def post(self, request, *args, **kwargs):
         # Only run for approved locations
-        credentials = GHLAuthCredentials.objects.filter(is_approved=True)
+        credentials = GHLAuthCredentials.objects.filter(is_approved=True)[:3]
 
         if not credentials.exists():
             return JsonResponse({"status": "error", "message": "No approved locations found."}, status=404)
 
-        # Option 1: Execute chords individually (recommended)
-        chord_results = []
+        # Create chains for sequential execution per location
+        chain_results = []
         
         for cred in credentials:
-            tasks_to_run = [
-                async_fetch_all_contacts.si(cred.location_id, cred.access_token),
-                async_sync_conversations_with_messages.si(cred.location_id, cred.access_token),
-                async_sync_conversations_with_calls.si(cred.location_id, cred.access_token),
-            ]
-
             # Create a pending log entry for this sync run
-            log = LocationSyncLog.objects.create(location=cred, status="pending")
+            log = LocationSyncLog.objects.create(
+                location=cred, 
+                status="pending",
+                started_at=timezone.now()
+            )
 
-            # Execute chord and store result
-            chord_result = chord(tasks_to_run)(mark_location_synced.s(cred.location_id, log.id))
-            chord_results.append(chord_result)
+            # Create a chain for sequential execution: contacts -> conversations -> calls
+            sequential_chain = chain(
+                async_fetch_all_contacts.si(cred.location_id, cred.access_token, log.id),
+                async_sync_conversations_with_messages.si(cred.location_id, cred.access_token, log.id),
+                async_sync_conversations_with_calls.si(cred.location_id, cred.access_token, log.id),
+                mark_location_synced.si(cred.location_id, log.id)
+            )
+
+            # Execute the chain
+            chain_result = sequential_chain.apply_async()
+            chain_results.append({
+                'location_id': cred.location_id,
+                'location_name': cred.location_name,
+                'chain_id': str(chain_result.id),
+                'log_id': log.id
+            })
 
         return JsonResponse({
             "status": "success",
-            "message": f"Triggered refetch for {credentials.count()} locations.",
-            "chord_ids": [str(result.id) for result in chord_results],
+            "message": f"Triggered sequential refetch for {credentials.count()} locations.",
+            "locations": chain_results,
         })
+

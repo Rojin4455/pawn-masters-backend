@@ -122,19 +122,45 @@ class SMSDefaultConfiguration(models.Model):
 
 
 
+from django.db import models
+from django.utils import timezone
+
 class LocationSyncLog(models.Model):
-    location = models.ForeignKey(GHLAuthCredentials, on_delete=models.CASCADE, related_name="sync_logs")
-    started_at = models.DateTimeField(auto_now_add=True)
-    finished_at = models.DateTimeField(null=True, blank=True)
-    status = models.CharField(
-        max_length=20,
-        choices=[
-            ("pending", "Pending"),
-            ("success", "Success"),
-            ("failed", "Failed"),
-        ],
-        default="pending",
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('fetching_contacts', 'Fetching Contacts'),
+        ('fetching_conversations', 'Fetching Conversations'),
+        ('fetching_calls', 'Fetching Calls'),
+        ('success', 'Success'),
+        ('failed', 'Failed'),
+    ]
+    
+    location = models.ForeignKey(
+        'GHLAuthCredentials', 
+        on_delete=models.CASCADE, 
+        related_name='sync_logs'
     )
+    status = models.CharField(
+        max_length=50, 
+        choices=STATUS_CHOICES, 
+        default='pending'
+    )
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-started_at']
+        
+    def __str__(self):
+        return f"{self.location.location_name} - {self.status} - {self.started_at}"
+    
+    @property
+    def duration(self):
+        if self.finished_at and self.started_at:
+            return self.finished_at - self.started_at
+        return None
 
 
 class FirebaseToken(models.Model):
