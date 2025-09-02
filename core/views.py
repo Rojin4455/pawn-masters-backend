@@ -186,7 +186,7 @@ from .models import GHLAuthCredentials,LocationSyncLog
 from .tasks import (
     async_fetch_all_contacts,
     async_sync_conversations_with_messages,
-    async_sync_conversations_with_calls,mark_location_synced
+    async_sync_conversations_with_calls,mark_location_synced,sync_location_data_sequential,sync_single_location_parallel
 )
 from django.utils import timezone
 from celery import chain, group
@@ -196,48 +196,114 @@ from celery import chain, group
 
 class RefetchAllLocationsView(View):
     """
-    Endpoint to manually trigger re-fetching of contacts, conversations, and calls
-    for ALL approved GHLAuthCredentials locations in sequential order.
+    Endpoint to trigger re-fetching with improved load distribution
     """
-
     def post(self, request, *args, **kwargs):
-        # Only run for approved locations
-        credentials = GHLAuthCredentials.objects.filter(is_approved=True)[:3]
-
+        # Get approved locations
+        credentials = GHLAuthCredentials.objects.filter(is_approved=True)[:10]  # Increased to 10 for testing
+        
         if not credentials.exists():
             return JsonResponse({"status": "error", "message": "No approved locations found."}, status=404)
-
-        # Create chains for sequential execution per location
-        chain_results = []
+        
+        # Option 1: Parallel Processing (recommended for better distribution)
+        if request.GET.get('mode') == 'parallel':
+            return self._handle_parallel_processing(credentials)
+        
+        # Option 2: Round-robin distribution (alternative approach)
+        elif request.GET.get('mode') == 'roundrobin':
+            return self._handle_round_robin_distribution(credentials)
+        
+        # Option 3: Default - improved sequential with better queue distribution
+        else:
+            return self._handle_improved_sequential(credentials)
+    
+    def _handle_parallel_processing(self, credentials):
+        """Process all locations with parallel task distribution"""
+        task_results = []
         
         for cred in credentials:
-            # Create a pending log entry for this sync run
+            # Each location gets processed with parallel sub-tasks
+            result = sync_single_location_parallel.apply_async(
+                args=[cred.location_id, cred.access_token],
+                queue='data_sync'  # Primary queue for coordination
+            )
+            
+            task_results.append({
+                'location_id': cred.location_id,
+                'location_name': cred.location_name,
+                'task_id': str(result.id),
+                'processing_mode': 'parallel'
+            })
+        
+        return JsonResponse({
+            "status": "success",
+            "message": f"Triggered parallel processing for {credentials.count()} locations.",
+            "locations": task_results,
+        })
+    
+    def _handle_round_robin_distribution(self, credentials):
+        """Distribute locations across different queues in round-robin fashion"""
+        queues = ['data_sync', 'celery', 'priority']
+        task_results = []
+        
+        for i, cred in enumerate(credentials):
+            # Rotate through queues
+            queue = queues[i % len(queues)]
+            
             log = LocationSyncLog.objects.create(
-                location=cred, 
+                location=cred,
                 status="pending",
                 started_at=timezone.now()
             )
-
-            # Create a chain for sequential execution: contacts -> conversations -> calls
-            sequential_chain = chain(
-                async_fetch_all_contacts.si(cred.location_id, cred.access_token, log.id),
-                async_sync_conversations_with_messages.si(cred.location_id, cred.access_token, log.id),
-                async_sync_conversations_with_calls.si(cred.location_id, cred.access_token, log.id),
-                mark_location_synced.si(cred.location_id, log.id)
+            
+            result = sync_location_data_sequential.apply_async(
+                args=[cred.location_id, cred.access_token],
+                queue=queue
             )
-
-            # Execute the chain
-            chain_result = sequential_chain.apply_async()
-            chain_results.append({
+            
+            task_results.append({
                 'location_id': cred.location_id,
                 'location_name': cred.location_name,
-                'chain_id': str(chain_result.id),
-                'log_id': log.id
+                'task_id': str(result.id),
+                'queue': queue,
+                'log_id': log.id,
+                'processing_mode': 'round_robin'
             })
-
+        
         return JsonResponse({
             "status": "success",
-            "message": f"Triggered sequential refetch for {credentials.count()} locations.",
-            "locations": chain_results,
+            "message": f"Triggered round-robin processing for {credentials.count()} locations.",
+            "locations": task_results,
+        })
+    
+    def _handle_improved_sequential(self, credentials):
+        """Improved sequential processing with better distribution"""
+        task_results = []
+        
+        for cred in credentials:
+            log = LocationSyncLog.objects.create(
+                location=cred,
+                status="pending",
+                started_at=timezone.now()
+            )
+            
+            # Use sequential task but let Celery distribute across workers
+            result = sync_location_data_sequential.apply_async(
+                args=[cred.location_id, cred.access_token],
+                queue='data_sync'
+            )
+            
+            task_results.append({
+                'location_id': cred.location_id,
+                'location_name': cred.location_name,
+                'task_id': str(result.id),
+                'log_id': log.id,
+                'processing_mode': 'sequential_improved'
+            })
+        
+        return JsonResponse({
+            "status": "success",
+            "message": f"Triggered improved sequential processing for {credentials.count()} locations.",
+            "locations": task_results,
         })
 

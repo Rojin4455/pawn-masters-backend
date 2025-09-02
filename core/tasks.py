@@ -75,14 +75,17 @@ def make_api_call():
 #             status="failed"
 #         )
 #         raise
-import logging
-from celery.exceptions import Retry
 
+
+import logging
+from celery import shared_task, group
+from celery.exceptions import Retry
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+@shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def async_fetch_all_contacts(self, location_id, access_token, log_id=None):
     """Fetch all contacts for a location with error handling"""
     try:
@@ -91,9 +94,9 @@ def async_fetch_all_contacts(self, location_id, access_token, log_id=None):
             log.status = "fetching_contacts"
             log.save()
         
-        logger.info(f"Starting contact fetch for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Starting contact fetch for location {location_id}")
         fetch_all_contacts(location_id, access_token)
-        logger.info(f"Successfully completed contact fetch for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Successfully completed contact fetch for location {location_id}")
         
         return f"Contacts fetched successfully for {location_id}"
         
@@ -126,9 +129,9 @@ def async_sync_conversations_with_messages(self, location_id, access_token, log_
             log.status = "fetching_conversations"
             log.save()
         
-        logger.info(f"Starting conversation sync for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Starting conversation sync for location {location_id}")
         sync_conversations_with_messages(location_id)
-        logger.info(f"Successfully completed conversation sync for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Successfully completed conversation sync for location {location_id}")
         
         return f"Conversations synced successfully for {location_id}"
         
@@ -161,10 +164,10 @@ def async_sync_conversations_with_calls(self, location_id, access_token, log_id=
             log.status = "fetching_calls"
             log.save()
         
-        logger.info(f"Starting call sync for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Starting call sync for location {location_id}")
         credential = GHLAuthCredentials.objects.get(location_id=location_id)
         fetch_calls_for_last_days_for_location(credential, days_to_fetch=365*5)
-        logger.info(f"Successfully completed call sync for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Successfully completed call sync for location {location_id}")
         
         return f"Calls synced successfully for {location_id}"
         
@@ -192,7 +195,7 @@ def async_sync_conversations_with_calls(self, location_id, access_token, log_id=
 def mark_location_synced(self, location_id, log_id):
     """Mark a location sync as completed"""
     try:
-        logger.info(f"Marking location {location_id} as synced")
+        logger.info(f"Worker {self.request.hostname}: Marking location {location_id} as synced")
         log = LocationSyncLog.objects.get(id=log_id)
         log.finished_at = timezone.now()
         log.status = "success"
@@ -205,7 +208,6 @@ def mark_location_synced(self, location_id, log_id):
         raise
     except Exception as exc:
         logger.error(f"Error marking location {location_id} as synced: {str(exc)}")
-        # Try to update the log with error status
         try:
             LocationSyncLog.objects.filter(id=log_id).update(
                 finished_at=timezone.now(),
@@ -217,11 +219,11 @@ def mark_location_synced(self, location_id, log_id):
         raise exc
 
 
-# Alternative approach using a single task with sequential execution
+# NEW: Improved parallel processing approach
 @shared_task(bind=True, max_retries=2, default_retry_delay=300)
-def sync_location_data_sequential(self, location_id, access_token):
+def sync_single_location_parallel(self, location_id, access_token):
     """
-    Alternative single task that handles all sync operations sequentially
+    Process a single location using parallel tasks for better distribution
     """
     log = LocationSyncLog.objects.create(
         location_id=location_id,
@@ -230,20 +232,72 @@ def sync_location_data_sequential(self, location_id, access_token):
     )
     
     try:
+        logger.info(f"Starting parallel sync for location {location_id}")
+        
+        # Create parallel tasks for this location
+        job = group(
+            async_fetch_all_contacts.s(location_id, access_token, log.id),
+            async_sync_conversations_with_messages.s(location_id, access_token, log.id),
+            async_sync_conversations_with_calls.s(location_id, access_token, log.id)
+        )
+        
+        # Execute tasks in parallel
+        result = job.apply_async()
+        
+        # Wait for all tasks to complete
+        results = result.get()
+        
+        # Mark as completed
+        log.status = "success"
+        log.finished_at = timezone.now()
+        log.save()
+        
+        logger.info(f"Successfully completed parallel sync for location {location_id}")
+        return f"Parallel sync completed for location {location_id}"
+        
+    except Exception as exc:
+        logger.error(f"Error in parallel sync for location {location_id}: {str(exc)}")
+        
+        log.status = "failed"
+        log.error_message = str(exc)
+        log.finished_at = timezone.now()
+        log.save()
+        
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=300)
+        else:
+            raise exc
+
+
+# Alternative: Sequential but with better distribution
+@shared_task(bind=True, max_retries=2, default_retry_delay=300)
+def sync_location_data_sequential(self, location_id, access_token):
+    """
+    Sequential sync with improved logging and worker identification
+    """
+    log = LocationSyncLog.objects.create(
+        location_id=location_id,
+        status="in_progress",
+        started_at=timezone.now()
+    )
+    
+    try:
+        logger.info(f"Worker {self.request.hostname}: Starting sequential sync for location {location_id}")
+        
         # Step 1: Fetch Contacts
-        logger.info(f"Step 1/3: Fetching contacts for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Step 1/3 - Fetching contacts for location {location_id}")
         log.status = "fetching_contacts"
         log.save()
         fetch_all_contacts(location_id, access_token)
         
         # Step 2: Sync Conversations and Messages
-        logger.info(f"Step 2/3: Syncing conversations for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Step 2/3 - Syncing conversations for location {location_id}")
         log.status = "fetching_conversations"
         log.save()
         sync_conversations_with_messages(location_id)
         
         # Step 3: Sync Calls
-        logger.info(f"Step 3/3: Syncing calls for location {location_id}")
+        logger.info(f"Worker {self.request.hostname}: Step 3/3 - Syncing calls for location {location_id}")
         log.status = "fetching_calls"
         log.save()
         credential = GHLAuthCredentials.objects.get(location_id=location_id)
@@ -254,11 +308,11 @@ def sync_location_data_sequential(self, location_id, access_token):
         log.finished_at = timezone.now()
         log.save()
         
-        logger.info(f"Successfully completed all sync operations for location {location_id}")
-        return f"All data synced successfully for location {location_id}"
+        logger.info(f"Worker {self.request.hostname}: Successfully completed sequential sync for location {location_id}")
+        return f"Sequential sync completed for location {location_id}"
         
     except Exception as exc:
-        logger.error(f"Error in sequential sync for location {location_id}: {str(exc)}")
+        logger.error(f"Worker {self.request.hostname}: Error in sequential sync for location {location_id}: {str(exc)}")
         
         log.status = "failed"
         log.error_message = str(exc)
@@ -267,6 +321,6 @@ def sync_location_data_sequential(self, location_id, access_token):
         
         if self.request.retries < self.max_retries:
             logger.info(f"Retrying sequential sync for location {location_id}")
-            raise self.retry(exc=exc, countdown=300)  # 5 minute delay
+            raise self.retry(exc=exc, countdown=300)
         else:
             raise exc
