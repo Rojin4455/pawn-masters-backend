@@ -343,3 +343,11 @@ def sync_location_data_sequential(self, location_id, access_token):
             raise self.retry(exc=exc, countdown=300)
         else:
             raise exc
+        
+
+
+@shared_task(bind=True)
+def test_task(self, message="Hello"):
+    """Test task to verify worker is functioning"""
+    logger.info(f"Worker {self.request.hostname}: Test task executed with message: {message}")
+    return f"Test task completed on {self.request.hostname}: {message}"
