@@ -10,38 +10,27 @@ app = Celery('pawn_master_backend')
 # the configuration object to child processes
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
-# Improved Celery Configuration for Better Load Distribution
+# FIXED: Improved Celery Configuration for Better Load Distribution
 app.conf.update(
+    # Broker configuration
+    broker_url='redis://localhost:6379/0',
+    result_backend='redis://localhost:6379/0',
+    
     # Task routing - distribute tasks across different queues
     task_routes={
-        # Contacts tasks - distribute across workers
+        # FIXED: Use the correct full task name paths
         'accounts_management_app.tasks.async_fetch_all_contacts': {'queue': 'data_sync'},
-        
-        # Conversations - can go to general queue for load balancing
         'accounts_management_app.tasks.async_sync_conversations_with_messages': {'queue': 'celery'},
-        
-        # Calls - priority queue (these seem to be the heaviest tasks)
         'accounts_management_app.tasks.async_sync_conversations_with_calls': {'queue': 'priority'},
-        
-        # Sequential processing - distribute based on location
         'accounts_management_app.tasks.sync_location_data_sequential': {'queue': 'data_sync'},
-        
-        # Completion marking - any queue is fine
+        'accounts_management_app.tasks.sync_single_location_parallel': {'queue': 'data_sync'},
         'accounts_management_app.tasks.mark_location_synced': {'queue': 'celery'},
-        
-        # API calls - priority queue
-        'core.tasks.make_api_call': {'queue': 'priority'},
     },
     
     # Worker configuration for better distribution
     worker_prefetch_multiplier=1,  # Critical: Only take 1 task at a time
     task_acks_late=True,  # Acknowledge tasks only after completion
     worker_disable_rate_limits=False,
-    
-    # Task result configuration
-    result_backend='redis://localhost:6379/0',
-    
-
     
     # Error handling
     task_reject_on_worker_lost=True,
@@ -51,6 +40,15 @@ app.conf.update(
     task_default_queue='celery',
     task_default_exchange_type='direct',
     task_default_routing_key='celery',
+    
+    # Task serialization
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    
+    # FIXED: Add broker connection settings for reliability
+    broker_connection_retry_on_startup=True,
+    broker_connection_retry=True,
     
     timezone='UTC',
 )

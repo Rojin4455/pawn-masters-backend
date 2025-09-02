@@ -81,6 +81,8 @@ import logging
 from celery import shared_task, group
 from celery.exceptions import Retry
 from django.utils import timezone
+from .models import LocationSyncLog, GHLAuthCredentials
+
 
 logger = logging.getLogger(__name__)
 
@@ -219,33 +221,42 @@ def mark_location_synced(self, location_id, log_id):
         raise exc
 
 
-# NEW: Improved parallel processing approach
+# FIXED: Improved parallel processing approach
 @shared_task(bind=True, max_retries=2, default_retry_delay=300)
 def sync_single_location_parallel(self, location_id, access_token):
     """
     Process a single location using parallel tasks for better distribution
     """
-    log = LocationSyncLog.objects.create(
-        location_id=location_id,
-        status="in_progress",
-        started_at=timezone.now()
-    )
-    
     try:
-        logger.info(f"Starting parallel sync for location {location_id}")
+        # FIXED: Get the credential object first
+        credential = GHLAuthCredentials.objects.get(location_id=location_id)
         
-        # Create parallel tasks for this location
-        job = group(
-            async_fetch_all_contacts.s(location_id, access_token, log.id),
-            async_sync_conversations_with_messages.s(location_id, access_token, log.id),
-            async_sync_conversations_with_calls.s(location_id, access_token, log.id)
+        log = LocationSyncLog.objects.create(
+            location=credential,  # Pass the credential object, not just location_id
+            status="in_progress",
+            started_at=timezone.now()
         )
         
-        # Execute tasks in parallel
-        result = job.apply_async()
+        logger.info(f"Starting parallel sync for location {location_id}")
+        
+        # Create parallel tasks for this location with explicit queue routing
+        job = group(
+            async_fetch_all_contacts.apply_async(
+                args=[location_id, access_token, log.id],
+                queue='data_sync'
+            ),
+            async_sync_conversations_with_messages.apply_async(
+                args=[location_id, access_token, log.id],
+                queue='celery'
+            ),
+            async_sync_conversations_with_calls.apply_async(
+                args=[location_id, access_token, log.id],
+                queue='priority'
+            )
+        )
         
         # Wait for all tasks to complete
-        results = result.get()
+        results = job.get()
         
         # Mark as completed
         log.status = "success"
@@ -258,10 +269,13 @@ def sync_single_location_parallel(self, location_id, access_token):
     except Exception as exc:
         logger.error(f"Error in parallel sync for location {location_id}: {str(exc)}")
         
-        log.status = "failed"
-        log.error_message = str(exc)
-        log.finished_at = timezone.now()
-        log.save()
+        try:
+            log.status = "failed"
+            log.error_message = str(exc)
+            log.finished_at = timezone.now()
+            log.save()
+        except:
+            pass
         
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc, countdown=300)
@@ -269,19 +283,22 @@ def sync_single_location_parallel(self, location_id, access_token):
             raise exc
 
 
-# Alternative: Sequential but with better distribution
+# FIXED: Sequential processing with correct credential handling
 @shared_task(bind=True, max_retries=2, default_retry_delay=300)
 def sync_location_data_sequential(self, location_id, access_token):
     """
     Sequential sync with improved logging and worker identification
     """
-    log = LocationSyncLog.objects.create(
-        location_id=location_id,
-        status="in_progress",
-        started_at=timezone.now()
-    )
-    
     try:
+        # FIXED: Get the credential object first
+        credential = GHLAuthCredentials.objects.get(location_id=location_id)
+        
+        log = LocationSyncLog.objects.create(
+            location=credential,  # Pass the credential object
+            status="in_progress",
+            started_at=timezone.now()
+        )
+        
         logger.info(f"Worker {self.request.hostname}: Starting sequential sync for location {location_id}")
         
         # Step 1: Fetch Contacts
@@ -300,7 +317,6 @@ def sync_location_data_sequential(self, location_id, access_token):
         logger.info(f"Worker {self.request.hostname}: Step 3/3 - Syncing calls for location {location_id}")
         log.status = "fetching_calls"
         log.save()
-        credential = GHLAuthCredentials.objects.get(location_id=location_id)
         fetch_calls_for_last_days_for_location(credential, days_to_fetch=365*5)
         
         # Mark as completed
@@ -314,10 +330,13 @@ def sync_location_data_sequential(self, location_id, access_token):
     except Exception as exc:
         logger.error(f"Worker {self.request.hostname}: Error in sequential sync for location {location_id}: {str(exc)}")
         
-        log.status = "failed"
-        log.error_message = str(exc)
-        log.finished_at = timezone.now()
-        log.save()
+        try:
+            log.status = "failed"
+            log.error_message = str(exc)
+            log.finished_at = timezone.now()
+            log.save()
+        except:
+            pass
         
         if self.request.retries < self.max_retries:
             logger.info(f"Retrying sequential sync for location {location_id}")
