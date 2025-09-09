@@ -200,17 +200,36 @@ class RefetchAllLocationsView(View):
     """
     def post(self, request, *args, **kwargs):
         # Get approved locations
-        credentials = GHLAuthCredentials.objects.filter(is_approved=True)  # Increased to 10 for testing
+        try:
+            data = json.loads(request.body.decode("utf-8"))
+        except json.JSONDecodeError:
+            data = {}
+
+        location_ids = data.get("location_ids", [])
+        print("location ID:", location_ids)
+        if not location_ids:
+            # If no ids provided, fallback to all approved
+            credentials = GHLAuthCredentials.objects.filter(is_approved=True)
+        else:
+            # Filter only provided ids
+            credentials = GHLAuthCredentials.objects.filter(
+                location_id__in=location_ids, is_approved=True
+            )
         
         if not credentials.exists():
             return JsonResponse({"status": "error", "message": "No approved locations found."}, status=404)
         
+        print(request.GET.get('mode'))
+        print(credentials)
+        
+        # return JsonResponse({"status": "success", "message": "success found"}, status=200)
         # Option 1: Parallel Processing (recommended for better distribution)
         if request.GET.get('mode') == 'parallel':
             return self._handle_parallel_processing(credentials)
         
         # Option 2: Round-robin distribution (alternative approach)
         elif request.GET.get('mode') == 'roundrobin':
+            
             return self._handle_round_robin_distribution(credentials)
         
         # Option 3: Default - improved sequential with better queue distribution

@@ -70,7 +70,9 @@ class TextMessage(models.Model):
     
     # Message content
     body = models.TextField(blank=True, null=True)
-    content_type = models.CharField(max_length=100, default='text/plain')
+    # content_type = models.CharField(max_length=100, default='text/plain')
+    content_type = models.TextField(default='text/plain')
+
     message_type = models.CharField(max_length=50)
     
     # New fields for SMS calculation
@@ -81,7 +83,7 @@ class TextMessage(models.Model):
     direction = models.CharField(max_length=20, choices=DIRECTION_CHOICES)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, blank=True, null=True)
     type = models.IntegerField(help_text="Message type ID from API")
-    source = models.CharField(max_length=100, blank=True, null=True)
+    source = models.CharField(max_length=255, blank=True, null=True)
     
     # User info
     user_id = models.CharField(max_length=255, blank=True, null=True)
