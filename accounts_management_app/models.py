@@ -3,9 +3,9 @@ from django.core.exceptions import ValidationError
 from core.models import GHLAuthCredentials
 
 class Contact(models.Model):
-    contact_id = models.CharField(max_length=100, unique=True)
-    first_name = models.CharField(max_length=100, blank=True, null=True)
-    last_name = models.CharField(max_length=100, blank=True, null=True)
+    contact_id = models.CharField(max_length=255, unique=True)
+    first_name = models.CharField(max_length=255, blank=True, null=True)
+    last_name = models.CharField(max_length=255, blank=True, null=True)
     phone = models.CharField(max_length=15, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     dnd = models.BooleanField(default=False)
@@ -13,7 +13,7 @@ class Contact(models.Model):
     date_added = models.DateTimeField(blank=True, null=True)
     tags = models.JSONField(default=list, blank=True)
     custom_fields = models.JSONField(default=list, blank=True)
-    location_id = models.CharField(max_length=100)
+    location_id = models.CharField(max_length=255)
     timestamp = models.DateTimeField(blank=True, null=True)
 
     def __str__(self):
