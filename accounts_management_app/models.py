@@ -6,7 +6,7 @@ class Contact(models.Model):
     contact_id = models.CharField(max_length=255, unique=True)
     first_name = models.CharField(max_length=255, blank=True, null=True)
     last_name = models.CharField(max_length=255, blank=True, null=True)
-    phone = models.CharField(max_length=15, blank=True, null=True)
+    phone = models.CharField(max_length=255, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     dnd = models.BooleanField(default=False)
     country = models.CharField(max_length=50, blank=True, null=True)
