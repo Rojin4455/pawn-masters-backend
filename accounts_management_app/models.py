@@ -1,3 +1,5 @@
+# accounts_mananagement_app models.py
+
 from django.db import models
 from django.core.exceptions import ValidationError
 from core.models import GHLAuthCredentials
@@ -100,8 +102,11 @@ class TextMessage(models.Model):
         db_table = "text_message"
         ordering = ['-date_added']
         indexes = [
+            # Retaining the original indexes
             models.Index(fields=['conversation', 'date_added']),
-            models.Index(fields=['segments', 'date_added']),  # Added for segment-based queries
+            models.Index(fields=['segments', 'date_added']),
+            # Add a new index for filtering by direction and date
+            models.Index(fields=['direction', 'date_added']),
         ]
     
     

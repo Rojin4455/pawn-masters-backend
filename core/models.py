@@ -55,6 +55,13 @@ class GHLAuthCredentials(models.Model):
         super().save(*args, **kwargs)
     
 
+    class Meta:
+        # Other Meta options
+        indexes = [
+            models.Index(fields=['is_approved', 'company_id', 'category_id']),
+            models.Index(fields=['company_id', 'category_id']),
+        ]
+
     def __str__(self):
         return f"{self.location_name} - {self.location_id}"
 
@@ -226,24 +233,18 @@ class CallReport(models.Model):
     recording_url = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True) # Add created_at for tracking
 
-    # called = models.CharField(max_length=20, null=True, blank=True)
-    # called_city = models.CharField(max_length=100, null=True, blank=True)
-    # called_country = models.CharField(max_length=100, null=True, blank=True)
-    # called_state = models.CharField(max_length=100, null=True, blank=True)
-    # called_zip = models.CharField(max_length=20, null=True, blank=True)
-    # caller = models.CharField(max_length=20, null=True, blank=True)
-    # caller_city = models.CharField(max_length=100, null=True, blank=True)
-    # caller_country = models.CharField(max_length=100, null=True, blank=True)
-    # caller_state = models.CharField(max_length=100, null=True, blank=True)
-    # caller_zip = models.CharField(max_length=20, null=True, blank=True)
-    # from_city = models.CharField(max_length=100, null=True, blank=True)
-    # from_country = models.CharField(max_length=100, null=True, blank=True)
-    # from_state = models.CharField(max_length=100, null=True, blank=True)
-    # from_zip = models.CharField(max_length=20, null=True, blank=True)
-    # to_city = models.CharField(max_length=100, null=True, blank=True)
-    # to_country = models.CharField(max_length=100, null=True, blank=True)
-    # to_state = models.CharField(max_length=100, null=True, blank=True)
-    # to_zip = models.CharField(max_length=20, null=True, blank=True)
+
+    class Meta:
+        # db_table = "call_record"
+        ordering = ['-date_added']
+        indexes = [
+            # Retaining original indexes
+            models.Index(fields=['conversation', 'date_added']),
+            models.Index(fields=['duration', 'date_added']),
+            # models.Index(fields=['status', 'date_added']),
+            # This is the most critical new index for your analytics
+            models.Index(fields=['direction', 'date_added']),
+        ]
 
     def __str__(self):
         return f"Call {self.id} for {self.ghl_credential.location_name}"

@@ -168,7 +168,7 @@ def async_sync_conversations_with_calls(self, location_id, access_token, log_id=
         
         logger.info(f"Worker {self.request.hostname}: Starting call sync for location {location_id}")
         credential = GHLAuthCredentials.objects.get(location_id=location_id)
-        fetch_calls_for_last_days_for_location(credential, days_to_fetch=365*5)
+        fetch_calls_for_last_days_for_location(credential, days_to_fetch=365)
         logger.info(f"Worker {self.request.hostname}: Successfully completed call sync for location {location_id}")
         
         return f"Calls synced successfully for {location_id}"
