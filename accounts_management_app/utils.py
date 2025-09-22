@@ -220,6 +220,7 @@ def get_ghl_auth_token(ghl_credential: GHLAuthCredentials):
 
     # Check for token expiry (consider a buffer, e.g., 5 minutes before actual expiry)
     # The 'expires_in' is usually in seconds
+    import datetime
     current_time = datetime.datetime.now(pytz.utc)
     token_expiry_time = identity_token.created_at + datetime.timedelta(seconds=identity_token.expires_in)
 

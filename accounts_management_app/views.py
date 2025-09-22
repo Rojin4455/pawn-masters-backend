@@ -1731,10 +1731,25 @@ def trigger_refresh_calls_task(request):
     POST /api/refresh-calls/
     Trigger the Celery task to refresh calls for all GHL locations (last 750 days).
     """
-    refresh_all_sync_call_for_last_750_day.delay()  # run in background
-    
+    print("=== [DEBUG] trigger_refresh_calls_task called ===")
+    print("Request data:", request.data)
+
+    try:
+        task = refresh_all_sync_call_for_last_750_day.delay()
+        print(f"=== [DEBUG] Celery task triggered. Task ID: {task.id} ===")
+    except Exception as e:
+        print("=== [ERROR] Failed to trigger Celery task ===")
+        print("Error:", str(e))
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
     return Response(
-        {"message": "Task to refresh calls for the last 750 days has been triggered."},
+        {
+            "message": "Task to refresh calls for the last 750 days has been triggered.",
+            "task_id": task.id
+        },
         status=status.HTTP_202_ACCEPTED
     )
 
