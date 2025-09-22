@@ -102,11 +102,10 @@ class TextMessage(models.Model):
         db_table = "text_message"
         ordering = ['-date_added']
         indexes = [
-            # Retaining the original indexes
-            models.Index(fields=['conversation', 'date_added']),
-            models.Index(fields=['segments', 'date_added']),
-            # Add a new index for filtering by direction and date
-            models.Index(fields=['direction', 'date_added']),
+            models.Index(fields=['date_added', 'direction']),
+            models.Index(fields=['conversation', 'date_added']),  # Use FK field directly
+            models.Index(fields=['direction']),
+            models.Index(fields=['message_id']),
         ]
     
     

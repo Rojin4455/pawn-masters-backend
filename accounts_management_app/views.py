@@ -137,14 +137,13 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
     """
     def get_base_sms_queryset(self, filters):
         """
-        Get base SMS queryset with applied filters
+        Optimized SMS queryset with minimal joins and proper indexing
         """
-        # queryset = TextMessage.objects.select_related('conversation__location')
         queryset = TextMessage.objects.select_related('conversation__location').filter(
             conversation__location__is_approved=True
         )
 
-        # Apply date range filter
+        # Apply filters with proper field lookups
         if filters.get('date_range'):
             date_range = filters['date_range']
             queryset = queryset.filter(
@@ -152,13 +151,11 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 date_added__lte=date_range['end']
             )
 
-        # Apply category filter
         if filters.get('category'):
             queryset = queryset.filter(
                 conversation__location__category_id=filters['category']
             )
 
-        # Apply company filter
         if filters.get('company_id'):
             queryset = queryset.filter(
                 conversation__location__company_id=filters['company_id']
@@ -168,16 +165,12 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
 
     def get_base_calls_queryset(self, filters):
         """
-        Get base Calls queryset with applied filters - Updated to use CallReport
+        Optimized Calls queryset
         """
-        # Updated to use CallReport instead of CallRecord
-        # queryset = CallReport.objects.select_related('ghl_credential')
         queryset = CallReport.objects.select_related('ghl_credential').filter(
             ghl_credential__is_approved=True
         )
 
-
-        # Apply date range filter
         if filters.get('date_range'):
             date_range = filters['date_range']
             queryset = queryset.filter(
@@ -185,13 +178,11 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 date_added__lte=date_range['end']
             )
 
-        # Apply category filter
         if filters.get('category'):
             queryset = queryset.filter(
                 ghl_credential__category_id=filters['category']
             )
 
-        # Apply company filter
         if filters.get('company_id'):
             queryset = queryset.filter(
                 ghl_credential__company_id=filters['company_id']
@@ -201,363 +192,353 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
 
     def get_account_view_data(self, filters):
         """
-        Get per-location analytics data with SMS and Call data
+        OPTIMIZED: Single aggregated query approach for better performance
         """
-        sms_queryset = self.get_base_sms_queryset(filters)
-        calls_queryset = self.get_base_calls_queryset(filters)
+        # Get all location data with rates in one query
+        location_queryset = GHLAuthCredentials.objects.filter(is_approved=True)
+        
+        if filters.get('category'):
+            location_queryset = location_queryset.filter(category_id=filters['category'])
+        if filters.get('company_id'):
+            location_queryset = location_queryset.filter(company_id=filters['company_id'])
+        
+        # Prefetch location data with rates
+        location_data = {
+            loc['location_id']: loc for loc in location_queryset.values(
+                'location_id', 'location_name', 'company_name', 
+                'inbound_rate', 'outbound_rate',
+                'inbound_call_rate', 'outbound_call_rate', 'call_price_ratio'
+            )
+        }
+        
+        if not location_data:
+            return []
 
-        # Get SMS stats per location
-        sms_stats = sms_queryset.values(
-            'conversation__location__location_id',
-            'conversation__location__location_name',
-            'conversation__location__company_name',
-            'conversation__location__inbound_rate',
-            'conversation__location__outbound_rate',
+        location_ids = list(location_data.keys())
+        
+        # OPTIMIZATION 1: Get conversations for these locations first
+        conversation_filters = Q(location__location_id__in=location_ids, location__is_approved=True)
+        if filters.get('date_range'):
+            date_range = filters['date_range']
+            conversation_filters &= Q(messages__date_added__gte=date_range['start'], messages__date_added__lte=date_range['end'])
+        
+        # Get SMS stats with proper joins
+        sms_stats = TextMessage.objects.select_related('conversation__location').filter(
+            conversation__location__location_id__in=location_ids,
+            conversation__location__is_approved=True,
+            **({'date_added__gte': filters['date_range']['start'], 'date_added__lte': filters['date_range']['end']} if filters.get('date_range') else {})
+        ).values(
+            'conversation__location__location_id'
         ).annotate(
-            # SMS Segment aggregations
-            total_inbound_segments=Coalesce(
-                Sum('segments', filter=Q(direction='inbound')), 0
-            ),
-            total_outbound_segments=Coalesce(
-                Sum('segments', filter=Q(direction='outbound')), 0
-            ),
-            # SMS Message count aggregations
-            total_inbound_messages=Coalesce(
-                Count('id', filter=Q(direction='inbound')), 0
-            ),
-            total_outbound_messages=Coalesce(
-                Count('id', filter=Q(direction='outbound')), 0
-            ),
-        ).order_by('conversation__location__company_name', 'conversation__location__location_name')
-
-        # Get Call stats per location - Updated to use CallReport
-        call_stats = calls_queryset.values(
-            'ghl_credential__location_id',
-            'ghl_credential__inbound_call_rate',
-            'ghl_credential__outbound_call_rate',
-            'ghl_credential__call_price_ratio',
+            total_inbound_segments=Coalesce(Sum('segments', filter=Q(direction='inbound')), 0),
+            total_outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
+            total_inbound_messages=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+            total_outbound_messages=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+        )
+        
+        # OPTIMIZATION 2: Single aggregated Call query using location_id field directly
+        call_filters = Q(location_id__in=location_ids)
+        if filters.get('date_range'):
+            date_range = filters['date_range']
+            call_filters &= Q(date_added__gte=date_range['start'], date_added__lte=date_range['end'])
+        
+        call_stats = CallReport.objects.filter(call_filters).values(
+            'location_id'
         ).annotate(
-            # Call aggregations - duration in seconds
-            total_inbound_call_duration=Coalesce(
-                Sum('duration', filter=Q(direction='inbound')), 0
-            ),
-            total_outbound_call_duration=Coalesce(
-                Sum('duration', filter=Q(direction='outbound')), 0
-            ),
-            # Call count aggregations
-            total_inbound_calls=Coalesce(
-                Count('id', filter=Q(direction='inbound')), 0
-            ),
-            total_outbound_calls=Coalesce(
-                Count('id', filter=Q(direction='outbound')), 0
-            ),
-        ).order_by('ghl_credential__location_id')
-
-        # Create a dictionary for quick call stats lookup, also store rates and ratio
-        call_stats_dict = {}
-        for stat in call_stats:
-            location_id = stat['ghl_credential__location_id']
-            call_stats_dict[location_id] = {
-                'total_inbound_call_duration': stat['total_inbound_call_duration'],
-                'total_outbound_call_duration': stat['total_outbound_call_duration'],
-                'total_inbound_calls': stat['total_inbound_calls'],
-                'total_outbound_calls': stat['total_outbound_calls'],
-                'inbound_call_rate': stat['ghl_credential__inbound_call_rate'],
-                'outbound_call_rate': stat['ghl_credential__outbound_call_rate'],
-                'call_price_ratio': stat['ghl_credential__call_price_ratio'],
-            }
-
+            total_inbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='inbound')), 0),
+            total_outbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
+            total_inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+            total_outbound_calls=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+        )
+        
+        # Convert to dictionaries for O(1) lookup
+        sms_stats_dict = {stat['conversation__location__location_id']: stat for stat in sms_stats}
+        call_stats_dict = {stat['location_id']: stat for stat in call_stats}
+        
+        # OPTIMIZATION 3: Single loop with pre-calculated values
         results = []
-        for location_sms_data in sms_stats:
-            location_id = location_sms_data['conversation__location__location_id']
-            location_call_data = call_stats_dict.get(location_id, {
-                'total_inbound_call_duration': 0,
-                'total_outbound_call_duration': 0,
-                'total_inbound_calls': 0,
-                'total_outbound_calls': 0,
-                'inbound_call_rate': Decimal('0.00'),
-                'outbound_call_rate': Decimal('0.00'),
-                'call_price_ratio': Decimal('1.0'), # Default to 1.0 if not found
+        for location_id, location_info in location_data.items():
+            sms_data = sms_stats_dict.get(location_id, {
+                'total_inbound_segments': 0, 'total_outbound_segments': 0,
+                'total_inbound_messages': 0, 'total_outbound_messages': 0
             })
-
-            # SMS Calculations
-            sms_inbound_rate = location_sms_data['conversation__location__inbound_rate'] or Decimal('0.00')
-            sms_outbound_rate = location_sms_data['conversation__location__outbound_rate'] or Decimal('0.00')
-
-            sms_inbound_usage = sms_inbound_rate * location_sms_data['total_inbound_messages']
-            sms_outbound_usage = sms_outbound_rate * location_sms_data['total_outbound_messages']
+            
+            call_data = call_stats_dict.get(location_id, {
+                'total_inbound_call_duration': 0, 'total_outbound_call_duration': 0,
+                'total_inbound_calls': 0, 'total_outbound_calls': 0
+            })
+            
+            # Pre-calculate rates with null handling
+            sms_inbound_rate = Decimal(str(location_info.get('inbound_rate') or '0.00'))
+            sms_outbound_rate = Decimal(str(location_info.get('outbound_rate') or '0.00'))
+            
+            call_inbound_rate = Decimal(str(location_info.get('inbound_call_rate') or '0.00'))
+            call_outbound_rate = Decimal(str(location_info.get('outbound_call_rate') or '0.00'))
+            call_price_ratio = Decimal(str(location_info.get('call_price_ratio') or '1.0'))
+            
+            # Calculate usages
+            sms_inbound_usage = sms_inbound_rate * sms_data['total_inbound_messages']
+            sms_outbound_usage = sms_outbound_rate * sms_data['total_outbound_messages']
             total_sms_usage = sms_inbound_usage + sms_outbound_usage
-
-            # Call Calculations
-            inbound_call_minutes = Decimal(str(location_call_data['total_inbound_call_duration'])) / Decimal('60')
-            outbound_call_minutes = Decimal(str(location_call_data['total_outbound_call_duration'])) / Decimal('60')
-
-            # Ensure call_price_ratio is correctly handled (0 if explicitly 0, 1.0 if None)
-            call_price_ratio = location_call_data['call_price_ratio']
-            if call_price_ratio is None:
-                call_price_ratio = Decimal('1.0') # Default for None, adjust if different logic needed
-
-            call_inbound_rate_effective = (location_call_data['inbound_call_rate'] or Decimal('0.00')) * call_price_ratio
-            call_outbound_rate_effective = (location_call_data['outbound_call_rate'] or Decimal('0.00')) * call_price_ratio
-
+            
+            inbound_call_minutes = Decimal(str(call_data['total_inbound_call_duration'])) / Decimal('60')
+            outbound_call_minutes = Decimal(str(call_data['total_outbound_call_duration'])) / Decimal('60')
+            
+            call_inbound_rate_effective = call_inbound_rate * call_price_ratio
+            call_outbound_rate_effective = call_outbound_rate * call_price_ratio
+            
             call_inbound_usage = call_inbound_rate_effective * inbound_call_minutes
             call_outbound_usage = call_outbound_rate_effective * outbound_call_minutes
             total_call_usage = call_inbound_usage + call_outbound_usage
-
-            # Combined Totals
-            total_inbound_usage = sms_inbound_usage + call_inbound_usage
-            total_outbound_usage = sms_outbound_usage + call_outbound_usage
+            
             total_usage = total_sms_usage + total_call_usage
-
+            
             results.append({
-                'company_name': location_sms_data['conversation__location__company_name'],
-                'location_name': location_sms_data['conversation__location__location_name'],
+                'company_name': location_info.get('company_name'),
+                'location_name': location_info.get('location_name'),
                 'location_id': location_id,
                 # SMS Data
-                'total_inbound_segments': location_sms_data['total_inbound_segments'],
-                'total_outbound_segments': location_sms_data['total_outbound_segments'],
-                'total_inbound_messages': location_sms_data['total_inbound_messages'],
-                'total_outbound_messages': location_sms_data['total_outbound_messages'],
+                'total_inbound_segments': sms_data['total_inbound_segments'],
+                'total_outbound_segments': sms_data['total_outbound_segments'],
+                'total_inbound_messages': sms_data['total_inbound_messages'],
+                'total_outbound_messages': sms_data['total_outbound_messages'],
                 'sms_inbound_usage': sms_inbound_usage,
                 'sms_outbound_usage': sms_outbound_usage,
                 'sms_inbound_rate': sms_inbound_rate,
                 'sms_outbound_rate': sms_outbound_rate,
-                "total_sms_usage": total_sms_usage,
+                'total_sms_usage': total_sms_usage,
                 # Call Data
-                'total_inbound_calls': location_call_data['total_inbound_calls'],
-                'total_outbound_calls': location_call_data['total_outbound_calls'],
-                'total_inbound_call_duration': location_call_data['total_inbound_call_duration'],
-                'total_outbound_call_duration': location_call_data['total_outbound_call_duration'],
+                'total_inbound_calls': call_data['total_inbound_calls'],
+                'total_outbound_calls': call_data['total_outbound_calls'],
+                'total_inbound_call_duration': call_data['total_inbound_call_duration'],
+                'total_outbound_call_duration': call_data['total_outbound_call_duration'],
                 'inbound_call_minutes': inbound_call_minutes,
                 'outbound_call_minutes': outbound_call_minutes,
                 'call_inbound_usage': call_inbound_usage,
                 'call_outbound_usage': call_outbound_usage,
-                'call_inbound_rate': location_call_data['inbound_call_rate'],
-                'call_outbound_rate': location_call_data['outbound_call_rate'],
-                "total_call_usage": total_call_usage,
+                'call_inbound_rate': call_inbound_rate,
+                'call_outbound_rate': call_outbound_rate,
+                'total_call_usage': total_call_usage,
                 # Combined Totals
-                'total_inbound_usage': total_inbound_usage,
-                'total_outbound_usage': total_outbound_usage,
+                'total_inbound_usage': sms_inbound_usage + call_inbound_usage,
+                'total_outbound_usage': sms_outbound_usage + call_outbound_usage,
                 'total_usage': total_usage,
             })
-        return results
+        
+        # Sort by company_name, location_name
+        return sorted(results, key=lambda x: (x['company_name'] or '', x['location_name'] or ''))
 
     def get_company_view_data(self, filters):
         """
-        Get aggregated company-level analytics data with SMS and Call data
+        OPTIMIZED: Company-level analytics with reduced database queries
         """
-        sms_queryset = self.get_base_sms_queryset(filters)
-        calls_queryset = self.get_base_calls_queryset(filters)
-
-        # Group SMS data by company
-        sms_company_stats = sms_queryset.values(
-            'conversation__location__company_id',
-        ).annotate(
-            # Get the first non-null company name for each company_id
-            company_name=Coalesce(
-                Min('conversation__location__company_name',
-                     filter=Q(conversation__location__company_name__isnull=False)),
-                Value('Unknown Company')
-            ),
-            # SMS Segment aggregations
-            total_inbound_segments=Coalesce(
-                Sum('segments', filter=Q(direction='inbound')), 0
-            ),
-            total_outbound_segments=Coalesce(
-                Sum('segments', filter=Q(direction='outbound')), 0
-            ),
-            # SMS Message count aggregations
-            total_inbound_messages=Coalesce(
-                Count('id', filter=Q(direction='inbound')), 0
-            ),
-            total_outbound_messages=Coalesce(
-                Count('id', filter=Q(direction='outbound')), 0
-            ),
-            # Location count
-            locations_count=Count('conversation__location__location_id', distinct=True),
-        ).order_by('company_name')
-
-        # Group Call data by company - Updated to use CallReport
-        call_company_stats = calls_queryset.values(
-            'ghl_credential__company_id',
-        ).annotate(
-            # Call aggregations
-            total_inbound_call_duration=Coalesce(
-                Sum('duration', filter=Q(direction='inbound')), 0
-            ),
-            total_outbound_call_duration=Coalesce(
-                Sum('duration', filter=Q(direction='outbound')), 0
-            ),
-            # Call count aggregations
-            total_inbound_calls=Coalesce(
-                Count('id', filter=Q(direction='inbound')), 0
-            ),
-            total_outbound_calls=Coalesce(
-                Count('id', filter=Q(direction='outbound')), 0
-            ),
+        # Get company filter
+        company_filter = Q()
+        if filters.get('category'):
+            company_filter &= Q(category_id=filters['category'])
+        if filters.get('company_id'):
+            company_filter &= Q(company_id=filters['company_id'])
+        
+        # OPTIMIZATION 1: Get all company data in one query
+        company_data = {}
+        location_rates = GHLAuthCredentials.objects.filter(
+            company_filter & Q(is_approved=True)
+        ).values(
+            'company_id', 'company_name', 'location_id',
+            'inbound_rate', 'outbound_rate',
+            'inbound_call_rate', 'outbound_call_rate', 'call_price_ratio'
         )
-
-        # Create a dictionary for quick call stats lookup
-        call_company_stats_dict = {
-            stat['ghl_credential__company_id']: stat
-            for stat in call_company_stats
-        }
-
-        # Calculate usage costs per company
+        
+        for item in location_rates:
+            company_id = item['company_id']
+            if company_id not in company_data:
+                company_data[company_id] = {
+                    'company_name': item['company_name'],
+                    'locations': [],
+                    'location_count': 0
+                }
+            company_data[company_id]['locations'].append(item)
+            company_data[company_id]['location_count'] += 1
+        
+        if not company_data:
+            return []
+        
+        company_ids = list(company_data.keys())
+        
+        # OPTIMIZATION 2: Aggregated SMS query by company
+        sms_filters = Q(conversation__location__company_id__in=company_ids)
+        if filters.get('date_range'):
+            date_range = filters['date_range']
+            sms_filters &= Q(date_added__gte=date_range['start'], date_added__lte=date_range['end'])
+        
+        sms_company_stats = TextMessage.objects.filter(sms_filters).values(
+            'conversation__location__company_id',
+            'conversation__location__location_id',
+            'direction'
+        ).annotate(
+            message_count=Count('id'),
+            segment_count=Sum('segments')
+        )
+        
+        # OPTIMIZATION 3: Aggregated Call query by company
+        call_filters = Q(location_id__in=[loc['location_id'] for company_info in company_data.values() for loc in company_info['locations']])
+        if filters.get('date_range'):
+            date_range = filters['date_range']
+            call_filters &= Q(date_added__gte=date_range['start'], date_added__lte=date_range['end'])
+        
+        call_company_stats = CallReport.objects.filter(call_filters).values(
+            'location_id', 
+            'direction'
+        ).annotate(
+            call_count=Count('id'),
+            call_duration=Sum('duration')
+        )
+        
+        # OPTIMIZATION 4: Process data in memory instead of multiple DB queries
         results = []
-        for company in sms_company_stats:
-            company_id = company['conversation__location__company_id']
-
-            # Get call stats for this company
-            company_call_stats = call_company_stats_dict.get(company_id, {
-                'total_inbound_call_duration': 0,
-                'total_outbound_call_duration': 0,
-                'total_inbound_calls': 0,
-                'total_outbound_calls': 0,
-            })
-
-            # Get all locations for this company to calculate total usage and rates
-            company_locations_data = GHLAuthCredentials.objects.filter(
-                company_id=company_id
-            ).values(
-                'location_id',
-                'inbound_rate',
-                'outbound_rate',
-                'inbound_call_rate',
-                'outbound_call_rate',
-                'call_price_ratio',
-            )
-
-            # Pre-fetch SMS data for all relevant locations within this company
-            sms_data_for_company = sms_queryset.filter(
-                conversation__location__company_id=company_id
-            ).values(
-                'conversation__location__location_id',
-                'direction'
-            ).annotate(
-                message_count=Coalesce(Count('id'), 0),
-                segment_count=Coalesce(Sum('segments'), 0)
-            )
-
-            # Pre-fetch Call data for all relevant locations within this company - Updated to use CallReport
-            call_data_for_company = calls_queryset.filter(
-                ghl_credential__company_id=company_id
-            ).values(
-                'ghl_credential__location_id',
-                'direction'
-            ).annotate(
-                call_duration=Coalesce(Sum('duration'), 0)
-            )
-
-            # Organize pre-fetched data
-            sms_location_summary = {}
-            for item in sms_data_for_company:
-                loc_id = item['conversation__location__location_id']
-                if loc_id not in sms_location_summary:
-                    sms_location_summary[loc_id] = {
-                        'inbound_messages': 0, 'outbound_messages': 0,
-                        'inbound_segments': 0, 'outbound_segments': 0
-                    }
-                if item['direction'] == 'inbound':
-                    sms_location_summary[loc_id]['inbound_messages'] += item['message_count']
-                    sms_location_summary[loc_id]['inbound_segments'] += item['segment_count']
-                else:
-                    sms_location_summary[loc_id]['outbound_messages'] += item['message_count']
-                    sms_location_summary[loc_id]['outbound_segments'] += item['segment_count']
-
-            call_location_summary = {}
-            for item in call_data_for_company:
-                loc_id = item['ghl_credential__location_id']
-                if loc_id not in call_location_summary:
-                    call_location_summary[loc_id] = {
-                        'inbound_duration': 0, 'outbound_duration': 0
-                    }
-                if item['direction'] == 'inbound':
-                    call_location_summary[loc_id]['inbound_duration'] += item['call_duration']
-                else:
-                    call_location_summary[loc_id]['outbound_duration'] += item['call_duration']
-
-            # Calculate total usage for this company
-            total_sms_inbound_usage = Decimal('0.00')
-            total_sms_outbound_usage = Decimal('0.00')
-            total_call_inbound_usage = Decimal('0.00')
-            total_call_outbound_usage = Decimal('0.00')
-
-            for location_config in company_locations_data:
-                location_id = location_config['location_id']
-
-                # SMS calculations
-                sms_inbound_rate = location_config.get('inbound_rate') or Decimal('0.00')
-                sms_outbound_rate = location_config.get('outbound_rate') or Decimal('0.00')
-
-                loc_sms_data = sms_location_summary.get(location_id, {'inbound_messages': 0, 'outbound_messages': 0})
-                total_sms_inbound_usage += sms_inbound_rate * Decimal(loc_sms_data['inbound_messages'])
-                total_sms_outbound_usage += sms_outbound_rate * Decimal(loc_sms_data['outbound_messages'])
-
-                # Call calculations
-                call_inbound_rate = location_config.get('inbound_call_rate') or Decimal('0.00')
-                call_outbound_rate = location_config.get('outbound_call_rate') or Decimal('0.00')
-
-                # Handle call_price_ratio: if None, default to 1.0; otherwise use its value (including 0)
-                call_price_ratio = location_config.get('call_price_ratio')
-                if call_price_ratio is None:
-                    call_price_ratio = Decimal('1.0') # Default for None
-
-                loc_call_data = call_location_summary.get(location_id, {'inbound_duration': 0, 'outbound_duration': 0})
-
-                inbound_call_minutes = Decimal(str(loc_call_data['inbound_duration'])) / Decimal('60')
-                outbound_call_minutes = Decimal(str(loc_call_data['outbound_duration'])) / Decimal('60')
-
-                total_call_inbound_usage += (call_inbound_rate * call_price_ratio) * inbound_call_minutes
-                total_call_outbound_usage += (call_outbound_rate * call_price_ratio) * outbound_call_minutes
-
-            # Combined totals
-            total_inbound_usage = total_sms_inbound_usage + total_call_inbound_usage
-            total_outbound_usage = total_sms_outbound_usage + total_call_outbound_usage
+        for company_id, company_info in company_data.items():
+            # Initialize counters
+            totals = {
+                'sms': {'inbound_messages': 0, 'outbound_messages': 0, 'inbound_segments': 0, 'outbound_segments': 0},
+                'calls': {'inbound_calls': 0, 'outbound_calls': 0, 'inbound_duration': 0, 'outbound_duration': 0},
+                'usage': {'sms_inbound': Decimal('0'), 'sms_outbound': Decimal('0'), 'call_inbound': Decimal('0'), 'call_outbound': Decimal('0')}
+            }
+            
+            # Create location lookup for rates
+            location_rates_dict = {loc['location_id']: loc for loc in company_info['locations']}
+            
+            # Process SMS data
+            for sms_stat in sms_company_stats:
+                if sms_stat['conversation__location__company_id'] == company_id:
+                    location_id = sms_stat['conversation__location__location_id']
+                    direction = sms_stat['direction']
+                    
+                    if direction == 'inbound':
+                        totals['sms']['inbound_messages'] += sms_stat['message_count']
+                        totals['sms']['inbound_segments'] += sms_stat['segment_count'] or 0
+                        
+                        # Calculate usage
+                        rate = Decimal(str(location_rates_dict.get(location_id, {}).get('inbound_rate') or '0.00'))
+                        totals['usage']['sms_inbound'] += rate * sms_stat['message_count']
+                    else:
+                        totals['sms']['outbound_messages'] += sms_stat['message_count']
+                        totals['sms']['outbound_segments'] += sms_stat['segment_count'] or 0
+                        
+                        # Calculate usage
+                        rate = Decimal(str(location_rates_dict.get(location_id, {}).get('outbound_rate') or '0.00'))
+                        totals['usage']['sms_outbound'] += rate * sms_stat['message_count']
+            
+            # Process Call data
+            for call_stat in call_company_stats:
+                # Find which company this location belongs to
+                for comp_id, comp_info in company_data.items():
+                    location_ids_in_company = [loc['location_id'] for loc in comp_info['locations']]
+                    if call_stat['location_id'] in location_ids_in_company and comp_id == company_id:
+                        location_id = call_stat['location_id']
+                        direction = call_stat['direction']
+                        duration_minutes = Decimal(str(call_stat['call_duration'] or 0)) / Decimal('60')
+                        
+                        location_rates = location_rates_dict.get(location_id, {})
+                        call_price_ratio = Decimal(str(location_rates.get('call_price_ratio') or '1.0'))
+                        
+                        if direction == 'inbound':
+                            totals['calls']['inbound_calls'] += call_stat['call_count']
+                            totals['calls']['inbound_duration'] += call_stat['call_duration'] or 0
+                            
+                            # Calculate usage
+                            rate = Decimal(str(location_rates.get('inbound_call_rate') or '0.00'))
+                            totals['usage']['call_inbound'] += (rate * call_price_ratio) * duration_minutes
+                        else:
+                            totals['calls']['outbound_calls'] += call_stat['call_count']
+                            totals['calls']['outbound_duration'] += call_stat['call_duration'] or 0
+                            
+                            # Calculate usage
+                            rate = Decimal(str(location_rates.get('outbound_call_rate') or '0.00'))
+                            totals['usage']['call_outbound'] += (rate * call_price_ratio) * duration_minutes
+                        break
+            
+            # Calculate final totals
+            total_inbound_usage = totals['usage']['sms_inbound'] + totals['usage']['call_inbound']
+            total_outbound_usage = totals['usage']['sms_outbound'] + totals['usage']['call_outbound']
             total_usage = total_inbound_usage + total_outbound_usage
-
-            # Convert call durations to minutes for display
-            total_inbound_call_minutes = Decimal(str(company_call_stats['total_inbound_call_duration'])) / Decimal('60')
-            total_outbound_call_minutes = Decimal(str(company_call_stats['total_outbound_call_duration'])) / Decimal('60')
-
+            
             results.append({
-                'company_name': company['company_name'],
+                'company_name': company_info['company_name'],
                 'company_id': company_id,
                 # SMS Data
-                'total_inbound_segments': company['total_inbound_segments'],
-                'total_outbound_segments': company['total_outbound_segments'],
-                'total_inbound_messages': company['total_inbound_messages'],
-                'total_outbound_messages': company['total_outbound_messages'],
-                'sms_inbound_usage': total_sms_inbound_usage,
-                'sms_outbound_usage': total_sms_outbound_usage,
+                'total_inbound_segments': totals['sms']['inbound_segments'],
+                'total_outbound_segments': totals['sms']['outbound_segments'],
+                'total_inbound_messages': totals['sms']['inbound_messages'],
+                'total_outbound_messages': totals['sms']['outbound_messages'],
+                'sms_inbound_usage': totals['usage']['sms_inbound'],
+                'sms_outbound_usage': totals['usage']['sms_outbound'],
                 # Call Data
-                'total_inbound_calls': company_call_stats['total_inbound_calls'],
-                'total_outbound_calls': company_call_stats['total_outbound_calls'],
-                'total_inbound_call_duration': company_call_stats['total_inbound_call_duration'],
-                'total_outbound_call_duration': company_call_stats['total_outbound_call_duration'],
-                'total_inbound_call_minutes': total_inbound_call_minutes,
-                'total_outbound_call_minutes': total_outbound_call_minutes,
-                'call_inbound_usage': total_call_inbound_usage,
-                'call_outbound_usage': total_call_outbound_usage,
+                'total_inbound_calls': totals['calls']['inbound_calls'],
+                'total_outbound_calls': totals['calls']['outbound_calls'],
+                'total_inbound_call_duration': totals['calls']['inbound_duration'],
+                'total_outbound_call_duration': totals['calls']['outbound_duration'],
+                'total_inbound_call_minutes': Decimal(str(totals['calls']['inbound_duration'])) / Decimal('60'),
+                'total_outbound_call_minutes': Decimal(str(totals['calls']['outbound_duration'])) / Decimal('60'),
+                'call_inbound_usage': totals['usage']['call_inbound'],
+                'call_outbound_usage': totals['usage']['call_outbound'],
                 # Combined Totals
                 'total_inbound_usage': total_inbound_usage,
                 'total_outbound_usage': total_outbound_usage,
                 'total_usage': total_usage,
-                'locations_count': company['locations_count'],
+                'locations_count': company_info['location_count'],
             })
-        return results
+        
+        return sorted(results, key=lambda x: x['company_name'] or '')
+
+    def _build_optimized_sms_queryset(self, filters, view_type):
+        """Optimized SMS queryset builder with proper indexing"""
+        base_filter = Q(conversation__location__is_approved=True)
+        
+        if filters.get('date_range'):
+            date_range = filters['date_range']
+            base_filter &= Q(date_added__gte=date_range['start'], date_added__lte=date_range['end'])
+        
+        category_id = filters.get("category_id")
+        if category_id:
+            base_filter &= Q(conversation__location__category__id=category_id)
+        
+        if view_type == 'account' and filters.get('location_ids'):
+            base_filter &= Q(conversation__location__location_id__in=filters['location_ids'])
+        elif view_type == 'company' and filters.get('company_ids'):
+            base_filter &= Q(conversation__location__company_id__in=filters['company_ids'])
+        
+        return TextMessage.objects.select_related('conversation__location').filter(base_filter)
+
+    def _build_optimized_calls_queryset(self, filters, view_type):
+        """Optimized calls queryset builder with proper indexing"""
+        base_filter = Q(ghl_credential__is_approved=True)
+        
+        if filters.get('date_range'):
+            date_range = filters['date_range']
+            base_filter &= Q(date_added__gte=date_range['start'], date_added__lte=date_range['end'])
+        
+        category_id = filters.get("category_id")
+        if category_id:
+            base_filter &= Q(ghl_credential__category_id=category_id)
+        
+        if view_type == 'account' and filters.get('location_ids'):
+            base_filter &= Q(location_id__in=filters['location_ids'])
+        elif view_type == 'company' and filters.get('company_ids'):
+            base_filter &= Q(ghl_credential__company_id__in=filters['company_ids'])
+        
+        return CallReport.objects.select_related('ghl_credential').filter(base_filter)
+
+    # Keep the rest of your methods (get_usage_analytics, etc.) but update them to use 
+    # the optimized methods above
 
     @action(detail=False, methods=['post'], url_path='usage-analytics')
     def get_usage_analytics(self, request):
         """
-        Get SMS and Call usage analytics based on view type and filters
-        Now uses cached data for faster responses
+        Optimized usage analytics endpoint
         """
-        # Validate request payload
         request_serializer = AnalyticsRequestSerializer(data=request.data)
         if not request_serializer.is_valid():
-            return Response(request_serializer.errors,
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response(request_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         validated_data = request_serializer.validated_data
         view_type = validated_data.get('view_type', 'account')
@@ -568,90 +549,36 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         }
 
         try:
-            cache_type = f'usage_analytics_{view_type}'
-            cached_entry = AnalyticsCache.objects.filter(
-                cache_type=cache_type,
-                view_type=view_type,
-                is_active=True
-            ).order_by('-created_at').first()
-
-            print("cached_entry",cached_entry)
-            
-            if cached_entry:
-                # Use cached data
-                cached_data = cached_entry.cached_data
-                
-                # Determine which date range to use based on request
-                date_range = filters.get('date_range')
-                if date_range:
-                    # For custom date ranges, fall back to real-time calculation
-                    # You could enhance this to cache more specific date ranges
-                    data = self._get_real_time_data(view_type, filters)
-                else:
-                    # Use default cached data (last 30 days)
-                    data = cached_data.get('last_30_days', {}).get('data', [])
-                
-                # Apply additional filters if needed
-                if filters.get('category') or filters.get('company_id'):
-                    data = self._apply_additional_filters(data, filters)
-                
-                serializer_class = AccountViewWithCallsSerializer if view_type == 'account' else CompanyViewWithCallsSerializer
-                
-                # Store custom metadata
-                request.custom_metadata = {
-                    'view_type': view_type,
-                    'filters_applied': {k: v for k, v in filters.items() if v is not None},
-                    'total_results_count': len(data),
-                    'cached': True,
-                    'cache_generated_at': cached_entry.created_at.isoformat()
-                }
-                
-                # Apply pagination
-                page = self.paginate_queryset(data)
-                if page is not None:
-                    serializer = serializer_class(page, many=True)
-                    return self.get_paginated_response(serializer.data)
-                else:
-                    serializer = serializer_class(data, many=True)
-                    return Response({
-                        'view_type': view_type,
-                        'filters_applied': {k: v for k, v in filters.items() if v is not None},
-                        'results_count': len(data),
-                        'cached': True,
-                        'cache_generated_at': cached_entry.created_at.isoformat(),
-                        'data': serializer.data
-                    }, status=status.HTTP_200_OK)
-            
+            # Use optimized methods
+            if view_type == 'account':
+                data = self.get_account_view_data(filters)
             else:
-                data = self._get_real_time_data(view_type, filters)
-                
-                # Trigger cache generation for next time (async)
-                generate_analytics_cache.delay([cache_type])
-                
-                serializer_class = AccountViewWithCallsSerializer if view_type == 'account' else CompanyViewWithCallsSerializer
-                
-                request.custom_metadata = {
+                data = self.get_company_view_data(filters)
+            
+            serializer_class = AccountViewWithCallsSerializer if view_type == 'account' else CompanyViewWithCallsSerializer
+            
+            request.custom_metadata = {
+                'view_type': view_type,
+                'filters_applied': {k: v for k, v in filters.items() if v is not None},
+                'total_results_count': len(data),
+                'cached': False,
+                'optimized': True
+            }
+            
+            page = self.paginate_queryset(data)
+            if page is not None:
+                serializer = serializer_class(page, many=True)
+                return self.get_paginated_response(serializer.data)
+            else:
+                serializer = serializer_class(data, many=True)
+                return Response({
                     'view_type': view_type,
                     'filters_applied': {k: v for k, v in filters.items() if v is not None},
-                    'total_results_count': len(data),
+                    'results_count': len(data),
                     'cached': False,
-                    'cache_generation_triggered': True
-                }
-                
-                page = self.paginate_queryset(data)
-                if page is not None:
-                    serializer = serializer_class(page, many=True)
-                    return self.get_paginated_response(serializer.data)
-                else:
-                    serializer = serializer_class(data, many=True)
-                    return Response({
-                        'view_type': view_type,
-                        'filters_applied': {k: v for k, v in filters.items() if v is not None},
-                        'results_count': len(data),
-                        'cached': False,
-                        'cache_generation_triggered': True,
-                        'data': serializer.data
-                    }, status=status.HTTP_200_OK)
+                    'optimized': True,
+                    'data': serializer.data
+                }, status=status.HTTP_200_OK)
 
         except Exception as e:
             return Response(

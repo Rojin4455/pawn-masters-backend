@@ -54,10 +54,10 @@ class GHLAuthCredentials(models.Model):
     
 
     class Meta:
-        # Other Meta options
         indexes = [
-            models.Index(fields=['is_approved', 'company_id', 'category_id']),
-            models.Index(fields=['company_id', 'category_id']),
+            models.Index(fields=['location_id', 'is_approved']),
+            models.Index(fields=['company_id', 'is_approved']),
+            models.Index(fields=['category_id', 'is_approved']),
         ]
 
     def __str__(self):
@@ -237,12 +237,11 @@ class CallReport(models.Model):
         # db_table = "call_record"
         ordering = ['-date_added']
         indexes = [
-            # Retaining original indexes
-            models.Index(fields=['conversation', 'date_added']),
-            models.Index(fields=['duration', 'date_added']),
-            # models.Index(fields=['status', 'date_added']),
-            # This is the most critical new index for your analytics
-            models.Index(fields=['direction', 'date_added']),
+            models.Index(fields=['date_added', 'direction']),
+            models.Index(fields=['location_id', 'date_added']),  # Use direct field, not FK lookup
+            models.Index(fields=['ghl_credential', 'date_added']),
+            models.Index(fields=['direction']),
+            models.Index(fields=['location_id']),
         ]
 
     def __str__(self):

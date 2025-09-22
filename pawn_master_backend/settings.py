@@ -177,6 +177,12 @@ DATABASES = {
         'PASSWORD': config("PASSWORD"),
         'HOST': config("HOST"),
         'PORT': '5432',
+        # 'OPTIONS': {
+        #     # Remove init_command - it's MySQL only
+        #     'options': '-c default_transaction_isolation=read_committed'  # Optional
+        # },
+        'CONN_MAX_AGE': 600,  # Connection pooling
+    
     }
 }
 
