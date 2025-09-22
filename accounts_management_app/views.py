@@ -76,6 +76,22 @@ class GHLAuthCredentialsDetailUpdateDeleteView(generics.RetrieveUpdateDestroyAPI
 
 from rest_framework.pagination import PageNumberPagination
 
+from django.db.models import Count, Sum, Q
+from django.db.models.functions import Coalesce, TruncDay, TruncWeek, TruncMonth
+from django.utils import timezone
+from datetime import timedelta
+from decimal import Decimal
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
+
+from .models import AnalyticsCache, AnalyticsCacheLog
+from .tasks import generate_analytics_cache
+from .serializers import AnalyticsRequestSerializer, BarGraphAnalyticsRequestSerializer, AccountViewWithCallsSerializer, CompanyViewWithCallsSerializer
+from dateutil.relativedelta import relativedelta
+
+
 class CustomPageNumberPagination(PageNumberPagination):
     """
     Custom pagination class to set page size and include additional metadata.
@@ -105,6 +121,9 @@ class CustomPageNumberPagination(PageNumberPagination):
             'location_ids': custom_metadata.get('location_ids'),
             'company_ids': custom_metadata.get('company_ids'),
             'total_results_count': custom_metadata.get('total_results_count'), # Total count before pagination
+            'cached': custom_metadata.get('cached', False),
+            'cache_generated_at': custom_metadata.get('cache_generated_at'),
+            'cache_generation_triggered': custom_metadata.get('cache_generation_triggered', False),
             'data': data  # The paginated list of results for the current page
         })
 
@@ -532,6 +551,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
     def get_usage_analytics(self, request):
         """
         Get SMS and Call usage analytics based on view type and filters
+        Now uses cached data for faster responses
         """
         # Validate request payload
         request_serializer = AnalyticsRequestSerializer(data=request.data)
@@ -548,92 +568,184 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
         }
 
         try:
-            if view_type == 'account':
-                data = self.get_account_view_data(filters)
-                serializer_class = AccountViewWithCallsSerializer
-            else:  # company view
-                data = self.get_company_view_data(filters)
-                serializer_class = CompanyViewWithCallsSerializer
+            cache_type = f'usage_analytics_{view_type}'
+            cached_entry = AnalyticsCache.objects.filter(
+                cache_type=cache_type,
+                view_type=view_type,
+                is_active=True
+            ).order_by('-created_at').first()
 
-            # Store custom metadata on the request object for the paginator to access
-            request.custom_metadata = {
-                'view_type': view_type,
-                'filters_applied': {k: v for k, v in filters.items() if v is not None},
-                'total_results_count': len(data), # Total count before pagination
-            }
-
-            # Apply pagination to the data list
-            page = self.paginate_queryset(data)
-
-            if page is not None:
-                serializer = serializer_class(page, many=True)
-                return self.get_paginated_response(serializer.data)
-            else:
-                serializer = serializer_class(data, many=True)
-                return Response({
+            print("cached_entry",cached_entry)
+            
+            if cached_entry:
+                # Use cached data
+                cached_data = cached_entry.cached_data
+                
+                # Determine which date range to use based on request
+                date_range = filters.get('date_range')
+                if date_range:
+                    # For custom date ranges, fall back to real-time calculation
+                    # You could enhance this to cache more specific date ranges
+                    data = self._get_real_time_data(view_type, filters)
+                else:
+                    # Use default cached data (last 30 days)
+                    data = cached_data.get('last_30_days', {}).get('data', [])
+                
+                # Apply additional filters if needed
+                if filters.get('category') or filters.get('company_id'):
+                    data = self._apply_additional_filters(data, filters)
+                
+                serializer_class = AccountViewWithCallsSerializer if view_type == 'account' else CompanyViewWithCallsSerializer
+                
+                # Store custom metadata
+                request.custom_metadata = {
                     'view_type': view_type,
                     'filters_applied': {k: v for k, v in filters.items() if v is not None},
-                    'results_count': len(data),
-                    'data': serializer.data
-                }, status=status.HTTP_200_OK)
+                    'total_results_count': len(data),
+                    'cached': True,
+                    'cache_generated_at': cached_entry.created_at.isoformat()
+                }
+                
+                # Apply pagination
+                page = self.paginate_queryset(data)
+                if page is not None:
+                    serializer = serializer_class(page, many=True)
+                    return self.get_paginated_response(serializer.data)
+                else:
+                    serializer = serializer_class(data, many=True)
+                    return Response({
+                        'view_type': view_type,
+                        'filters_applied': {k: v for k, v in filters.items() if v is not None},
+                        'results_count': len(data),
+                        'cached': True,
+                        'cache_generated_at': cached_entry.created_at.isoformat(),
+                        'data': serializer.data
+                    }, status=status.HTTP_200_OK)
+            
+            else:
+                data = self._get_real_time_data(view_type, filters)
+                
+                # Trigger cache generation for next time (async)
+                generate_analytics_cache.delay([cache_type])
+                
+                serializer_class = AccountViewWithCallsSerializer if view_type == 'account' else CompanyViewWithCallsSerializer
+                
+                request.custom_metadata = {
+                    'view_type': view_type,
+                    'filters_applied': {k: v for k, v in filters.items() if v is not None},
+                    'total_results_count': len(data),
+                    'cached': False,
+                    'cache_generation_triggered': True
+                }
+                
+                page = self.paginate_queryset(data)
+                if page is not None:
+                    serializer = serializer_class(page, many=True)
+                    return self.get_paginated_response(serializer.data)
+                else:
+                    serializer = serializer_class(data, many=True)
+                    return Response({
+                        'view_type': view_type,
+                        'filters_applied': {k: v for k, v in filters.items() if v is not None},
+                        'results_count': len(data),
+                        'cached': False,
+                        'cache_generation_triggered': True,
+                        'data': serializer.data
+                    }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            # traceback.print_exc() # Print traceback for debugging
             return Response(
                 {'error': f'Failed to fetch analytics data: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    def _get_real_time_data(self, view_type, filters):
+        """Helper method to get real-time data (original logic)"""
+        if view_type == 'account':
+            return self.get_account_view_data(filters)
+        else:
+            return self.get_company_view_data(filters)
+    
+    def _apply_additional_filters(self, data, filters):
+        """Apply additional filters to cached data"""
+        # Implement filtering logic based on your data structure
+        # This is a placeholder - adjust based on your actual data format
+        filtered_data = data
+        
+        if filters.get('category'):
+            # Filter by category if your data includes category info
+            # Example: filtered_data = [item for item in data if item.get('category_id') == filters['category']]
+            pass
+        
+        if filters.get('company_id'):
+            # Filter by company_id if your data includes company info
+            # Example: filtered_data = [item for item in data if item.get('company_id') == filters['company_id']]
+            pass
+        
+        return filtered_data
+
     @action(detail=False, methods=['get'], url_path='usage-summary')
     def get_usage_summary(self, request):
         """
         Get overall usage summary statistics including SMS and Calls
+        Now uses cached data for faster responses
         """
         try:
-            # Get SMS statistics
-            sms_stats = TextMessage.objects.aggregate(
-                total_messages=Coalesce(Count('id'), 0),
-                total_segments=Coalesce(Sum('segments'), 0),
-                total_inbound_messages=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
-                total_outbound_messages=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
-                total_inbound_segments=Coalesce(Sum('segments', filter=Q(direction='inbound')), 0),
-                total_outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
-            )
+            cached_entry = AnalyticsCache.objects.filter(
+                cache_type='usage_summary',
+                is_active=True
+            ).order_by('-created_at').first()
+            
+            if cached_entry:
+                cached_data = cached_entry.cached_data
+                return Response({
+                    'sms_summary': cached_data.get('sms_summary', {}),
+                    'call_summary': cached_data.get('call_summary', {}),
+                    'cached': True,
+                    'cache_generated_at': cached_entry.created_at.isoformat()
+                }, status=status.HTTP_200_OK)
+            
+            else:
+                sms_stats = TextMessage.objects.aggregate(
+                    total_messages=Coalesce(Count('id'), 0),
+                    total_segments=Coalesce(Sum('segments'), 0),
+                    total_inbound_messages=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                    total_outbound_messages=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                    total_inbound_segments=Coalesce(Sum('segments', filter=Q(direction='inbound')), 0),
+                    total_outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
+                )
 
-            # Get Call statistics - Updated to use CallReport
-            call_stats = CallReport.objects.aggregate(
-                total_calls=Coalesce(Count('id'), 0),
-                total_call_duration=Coalesce(Sum('duration'), 0),
-                total_inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
-                total_outbound_calls=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
-                total_inbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='inbound')), 0),
-                total_outbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
-            )
-
-            # Note: Calculating total usage for get_usage_summary is complex
-            # as rates are per-location. This endpoint currently returns raw counts.
-            # If you need aggregated usage costs here, it would require a similar
-            # aggregation logic as get_company_view_data.
-
-            return Response({
-                'sms_summary': sms_stats,
-                'call_summary': call_stats,
-            }, status=status.HTTP_200_OK)
+                call_stats = CallReport.objects.aggregate(
+                    total_calls=Coalesce(Count('id'), 0),
+                    total_call_duration=Coalesce(Sum('duration'), 0),
+                    total_inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                    total_outbound_calls=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                    total_inbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='inbound')), 0),
+                    total_outbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
+                )
+                
+                # Trigger cache generation for next time
+                generate_analytics_cache.delay(['usage_summary'])
+                
+                return Response({
+                    'sms_summary': sms_stats,
+                    'call_summary': call_stats,
+                    'cached': False,
+                    'cache_generation_triggered': True
+                }, status=status.HTTP_200_OK)
 
         except Exception as e:
             return Response(
                 {'error': f'Failed to fetch usage summary: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
-
-
 
     @action(detail=False, methods=['post'], url_path='bar-graph-analytics')
     def get_bar_graph_analytics(self, request):
         """
         Get SMS and Call analytics data formatted for bar graph visualization
         Supports both Account View (location-based) and Company View (company-based)
+        Now uses cached data for faster responses
         """
         # Validate request payload
         request_serializer = BarGraphAnalyticsRequestSerializer(data=request.data)
@@ -653,7 +765,33 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
 
         category_id = validated_data.get('category_id',0)  # account, company
         try:
-            # Build base filters
+            cache_type = f'bar_graph_{graph_type}'
+            cached_entry = AnalyticsCache.objects.filter(
+                cache_type=cache_type,
+                is_active=True
+            ).order_by('-created_at').first()
+            
+            # Check if cache exists and if the request is for default parameters
+            if cached_entry and not date_range and not location_ids and not company_ids and not category_id:
+                # Use cached data for default requests
+                cached_data = cached_entry.cached_data
+                cache_key = f"{view_type}_{data_type}"
+                
+                if cache_key in cached_data:
+                    data = cached_data[cache_key].get('data', [])
+                    
+                    return Response({
+                        'view_type': view_type,
+                        'graph_type': graph_type,
+                        'data_type': data_type,
+                        'date_range': cached_data.get('date_range'), # Use cached date range for context
+                        'location_ids': location_ids if view_type == 'account' else None,
+                        'company_ids': company_ids if view_type == 'company' else None,
+                        'cached': True,
+                        'cache_generated_at': cached_entry.created_at.isoformat(),
+                        'data': data
+                    }, status=status.HTTP_200_OK)
+            
             base_filters = {}
             if category_id:
                 base_filters["category_id"] = category_id
@@ -676,6 +814,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                     {'error': 'Invalid graph_type. Must be daily, weekly, or monthly'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            
+            # Trigger cache generation if using default parameters
+            if not date_range and not location_ids and not company_ids and not category_id:
+                generate_analytics_cache.delay([cache_type])
 
             return Response({
                 'view_type': view_type,
@@ -684,6 +826,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
                 'date_range': date_range,
                 'location_ids': location_ids if view_type == 'account' else None,
                 'company_ids': company_ids if view_type == 'company' else None,
+                'cached': False,
                 'data': data
             }, status=status.HTTP_200_OK)
 
@@ -692,6 +835,65 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             traceback.print_exc()
             return Response(
                 {'error': f'Failed to fetch bar graph analytics: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'], url_path='refresh-cache')
+    def refresh_cache(self, request):
+        """
+        Manually trigger cache refresh for all or specific cache types
+        """
+        cache_types = request.data.get('cache_types', None)
+        
+        try:
+            result = generate_analytics_cache.delay(cache_types)
+            return Response({
+                'message': 'Cache refresh triggered successfully',
+                'task_id': result.id,
+                'cache_types': cache_types or 'all'
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to trigger cache refresh: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'], url_path='cache-status')
+    def get_cache_status(self, request):
+        """
+        Get status of all cached data
+        """
+        try:
+            cache_entries = AnalyticsCache.objects.filter(is_active=True).order_by('cache_type', '-created_at')
+            recent_logs = AnalyticsCacheLog.objects.all()[:10]
+            
+            cache_status = {}
+            for entry in cache_entries:
+                if entry.cache_type not in cache_status:
+                    cache_status[entry.cache_type] = {
+                        'last_updated': entry.created_at.isoformat(),
+                        'computation_time': entry.computation_time_seconds,
+                        'record_count': entry.record_count,
+                        'age_hours': (timezone.now() - entry.created_at).total_seconds() / 3600
+                    }
+            
+            logs_data = [{
+                'cache_type': log.cache_type,
+                'status': log.status,
+                'started_at': log.started_at.isoformat(),
+                'duration': log.duration_seconds,
+                'records_processed': log.records_processed,
+                'error': log.error_message
+            } for log in recent_logs]
+            
+            return Response({
+                'cache_status': cache_status,
+                'recent_logs': logs_data
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to get cache status: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -898,7 +1100,10 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
 
         category_id = filters.get("category_id")
         if category_id:
-            queryset = queryset.filter(conversation__location__category__id=category_id)
+            # This filter seems incorrect as it references conversation.location.category__id
+            # but the queryset is for CallReport which relates to ghl_credential.
+            # Assuming it should filter based on ghl_credential's category.
+            queryset = queryset.filter(ghl_credential__category_id=category_id)
         
         if filters.get('date_range'):
             date_range = filters['date_range']
@@ -1168,858 +1373,34 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
 
 
 
-# from django.db import connection
+from django.db import connection
 
 
 
-# class CustomPageNumberPagination(PageNumberPagination):
-#     """
-#     Custom pagination class to set page size and include additional metadata.
-#     """
-#     page_size = 10
-#     page_size_query_param = 'page_size'
-#     max_page_size = 1000
+class CustomPageNumberPagination(PageNumberPagination):
+    """
+    Custom pagination class to set page size and include additional metadata.
+    """
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 1000
 
-#     def get_paginated_response(self, data):
-#         custom_metadata = getattr(self.request, 'custom_metadata', {})
-#         return Response({
-#             'count': self.page.paginator.count,
-#             'next': self.get_next_link(),
-#             'previous': self.get_previous_link(),
-#             'view_type': custom_metadata.get('view_type'),
-#             'filters_applied': custom_metadata.get('filters_applied'),
-#             'graph_type': custom_metadata.get('graph_type'),
-#             'data_type': custom_metadata.get('data_type'),
-#             'date_range': custom_metadata.get('date_range'),
-#             'location_ids': custom_metadata.get('location_ids'),
-#             'company_ids': custom_metadata.get('company_ids'),
-#             'total_results_count': custom_metadata.get('total_results_count'),
-#             'data': data
-#         })
-
-
-# class OptimizedSMSAnalyticsViewSet(viewsets.GenericViewSet):
-#     pagination_class = CustomPageNumberPagination
-
-#     def get_account_view_data(self, filters):
-#         """
-#         Optimized account view with single query using raw SQL for better performance
-#         """
-#         # Build WHERE clauses for filters
-#         where_conditions = ["ghl.is_approved = TRUE"]
-#         params = []
-        
-#         if filters.get('date_range'):
-#             date_range = filters['date_range']
-#             where_conditions.append("tm.date_added >= %s AND tm.date_added <= %s")
-#             params.extend([date_range['start'], date_range['end']])
-            
-#         if filters.get('category'):
-#             where_conditions.append("ghl.category_id = %s")
-#             params.append(filters['category'])
-            
-#         if filters.get('company_id'):
-#             where_conditions.append("ghl.company_id = %s")
-#             params.append(filters['company_id'])
-
-#         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
-
-#         # Single optimized query combining SMS and Call data
-#         sql = f"""
-#         WITH location_sms_stats AS (
-#             SELECT 
-#                 ghl.location_id,
-#                 ghl.location_name,
-#                 ghl.company_name,
-#                 ghl.inbound_rate,
-#                 ghl.outbound_rate,
-#                 ghl.inbound_call_rate,
-#                 ghl.outbound_call_rate,
-#                 COALESCE(ghl.call_price_ratio, 1.0) as call_price_ratio,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN tm.segments ELSE 0 END), 0) as total_inbound_segments,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN tm.segments ELSE 0 END), 0) as total_outbound_segments,
-#                 COALESCE(COUNT(CASE WHEN tm.direction = 'inbound' THEN tm.id END), 0) as total_inbound_messages,
-#                 COALESCE(COUNT(CASE WHEN tm.direction = 'outbound' THEN tm.id END), 0) as total_outbound_messages
-#             FROM core_ghlauthcredentials ghl
-#             LEFT JOIN ghl_conversation gc ON ghl.location_id = gc.location_id
-#             LEFT JOIN text_message tm ON gc.conversation_id = tm.conversation_id AND {where_clause.replace('ghl.', 'ghl.')}
-#             WHERE ghl.is_approved = TRUE
-#             GROUP BY ghl.location_id, ghl.location_name, ghl.company_name, 
-#                      ghl.inbound_rate, ghl.outbound_rate, ghl.inbound_call_rate, 
-#                      ghl.outbound_call_rate, ghl.call_price_ratio
-#         ),
-#         location_call_stats AS (
-#             SELECT 
-#                 cr.location_id,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN cr.duration ELSE 0 END), 0) as total_inbound_call_duration,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN cr.duration ELSE 0 END), 0) as total_outbound_call_duration,
-#                 COALESCE(COUNT(CASE WHEN cr.direction = 'inbound' THEN cr.id END), 0) as total_inbound_calls,
-#                 COALESCE(COUNT(CASE WHEN cr.direction = 'outbound' THEN cr.id END), 0) as total_outbound_calls
-#             FROM core_callreport cr
-#             INNER JOIN core_ghlauthcredentials ghl ON cr.ghl_credential_id = ghl.id
-#             WHERE {where_clause.replace('tm.', 'cr.')}
-#             GROUP BY cr.location_id
-#         )
-#         SELECT 
-#             sms.*,
-#             COALESCE(calls.total_inbound_call_duration, 0) as total_inbound_call_duration,
-#             COALESCE(calls.total_outbound_call_duration, 0) as total_outbound_call_duration,
-#             COALESCE(calls.total_inbound_calls, 0) as total_inbound_calls,
-#             COALESCE(calls.total_outbound_calls, 0) as total_outbound_calls,
-#             -- Calculate usage costs in SQL
-#             (COALESCE(sms.inbound_rate, 0) * sms.total_inbound_messages) as sms_inbound_usage,
-#             (COALESCE(sms.outbound_rate, 0) * sms.total_outbound_messages) as sms_outbound_usage,
-#             (COALESCE(sms.inbound_call_rate, 0) * sms.call_price_ratio * COALESCE(calls.total_inbound_call_duration, 0) / 60.0) as call_inbound_usage,
-#             (COALESCE(sms.outbound_call_rate, 0) * sms.call_price_ratio * COALESCE(calls.total_outbound_call_duration, 0) / 60.0) as call_outbound_usage
-#         FROM location_sms_stats sms
-#         LEFT JOIN location_call_stats calls ON sms.location_id = calls.location_id
-#         ORDER BY sms.company_name, sms.location_name
-#         """
-
-#         with connection.cursor() as cursor:
-#             cursor.execute(sql, params)
-#             columns = [col[0] for col in cursor.description]
-#             results = []
-            
-#             for row in cursor.fetchall():
-#                 data = dict(zip(columns, row))
-                
-#                 # Convert to Decimal for precision
-#                 sms_inbound_usage = Decimal(str(data['sms_inbound_usage'] or 0))
-#                 sms_outbound_usage = Decimal(str(data['sms_outbound_usage'] or 0))
-#                 call_inbound_usage = Decimal(str(data['call_inbound_usage'] or 0))
-#                 call_outbound_usage = Decimal(str(data['call_outbound_usage'] or 0))
-                
-#                 total_sms_usage = sms_inbound_usage + sms_outbound_usage
-#                 total_call_usage = call_inbound_usage + call_outbound_usage
-#                 total_inbound_usage = sms_inbound_usage + call_inbound_usage
-#                 total_outbound_usage = sms_outbound_usage + call_outbound_usage
-#                 total_usage = total_sms_usage + total_call_usage
-                
-#                 results.append({
-#                     'company_name': data['company_name'],
-#                     'location_name': data['location_name'],
-#                     'location_id': data['location_id'],
-#                     # SMS Data
-#                     'total_inbound_segments': data['total_inbound_segments'],
-#                     'total_outbound_segments': data['total_outbound_segments'],
-#                     'total_inbound_messages': data['total_inbound_messages'],
-#                     'total_outbound_messages': data['total_outbound_messages'],
-#                     'sms_inbound_usage': sms_inbound_usage,
-#                     'sms_outbound_usage': sms_outbound_usage,
-#                     'sms_inbound_rate': Decimal(str(data['inbound_rate'] or 0)),
-#                     'sms_outbound_rate': Decimal(str(data['outbound_rate'] or 0)),
-#                     'total_sms_usage': total_sms_usage,
-#                     # Call Data
-#                     'total_inbound_calls': data['total_inbound_calls'],
-#                     'total_outbound_calls': data['total_outbound_calls'],
-#                     'total_inbound_call_duration': data['total_inbound_call_duration'],
-#                     'total_outbound_call_duration': data['total_outbound_call_duration'],
-#                     'inbound_call_minutes': Decimal(str(data['total_inbound_call_duration'] or 0)) / Decimal('60'),
-#                     'outbound_call_minutes': Decimal(str(data['total_outbound_call_duration'] or 0)) / Decimal('60'),
-#                     'call_inbound_usage': call_inbound_usage,
-#                     'call_outbound_usage': call_outbound_usage,
-#                     'call_inbound_rate': Decimal(str(data['inbound_call_rate'] or 0)),
-#                     'call_outbound_rate': Decimal(str(data['outbound_call_rate'] or 0)),
-#                     'total_call_usage': total_call_usage,
-#                     # Combined Totals
-#                     'total_inbound_usage': total_inbound_usage,
-#                     'total_outbound_usage': total_outbound_usage,
-#                     'total_usage': total_usage,
-#                 })
-        
-#         return results
-
-#     def get_company_view_data(self, filters):
-#         """
-#         Optimized company view with single query using raw SQL
-#         """
-#         where_conditions = ["ghl.is_approved = TRUE"]
-#         params = []
-        
-#         if filters.get('date_range'):
-#             date_range = filters['date_range']
-#             where_conditions.append("tm.date_added >= %s AND tm.date_added <= %s")
-#             params.extend([date_range['start'], date_range['end']])
-            
-#         if filters.get('category'):
-#             where_conditions.append("ghl.category_id = %s")
-#             params.append(filters['category'])
-            
-#         if filters.get('company_id'):
-#             where_conditions.append("ghl.company_id = %s")
-#             params.append(filters['company_id'])
-
-#         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
-
-#         sql = f"""
-#         WITH company_sms_stats AS (
-#             SELECT 
-#                 ghl.company_id,
-#                 COALESCE(MIN(CASE WHEN ghl.company_name IS NOT NULL THEN ghl.company_name END), 'Unknown Company') as company_name,
-#                 COUNT(DISTINCT ghl.location_id) as locations_count,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN tm.segments ELSE 0 END), 0) as total_inbound_segments,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN tm.segments ELSE 0 END), 0) as total_outbound_segments,
-#                 COALESCE(COUNT(CASE WHEN tm.direction = 'inbound' THEN tm.id END), 0) as total_inbound_messages,
-#                 COALESCE(COUNT(CASE WHEN tm.direction = 'outbound' THEN tm.id END), 0) as total_outbound_messages
-#             FROM core_ghlauthcredentials ghl
-#             LEFT JOIN ghl_conversation gc ON ghl.location_id = gc.location_id
-#             LEFT JOIN text_message tm ON gc.conversation_id = tm.conversation_id AND {where_clause.replace('ghl.', 'ghl.')}
-#             WHERE ghl.is_approved = TRUE
-#             GROUP BY ghl.company_id
-#         ),
-#         company_call_stats AS (
-#             SELECT 
-#                 ghl.company_id,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN cr.duration ELSE 0 END), 0) as total_inbound_call_duration,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN cr.duration ELSE 0 END), 0) as total_outbound_call_duration,
-#                 COALESCE(COUNT(CASE WHEN cr.direction = 'inbound' THEN cr.id END), 0) as total_inbound_calls,
-#                 COALESCE(COUNT(CASE WHEN cr.direction = 'outbound' THEN cr.id END), 0) as total_outbound_calls
-#             FROM core_callreport cr
-#             INNER JOIN core_ghlauthcredentials ghl ON cr.ghl_credential_id = ghl.id
-#             WHERE {where_clause.replace('tm.', 'cr.')}
-#             GROUP BY ghl.company_id
-#         ),
-#         company_usage_calc AS (
-#             SELECT 
-#                 ghl.company_id,
-#                 SUM(
-#                     (COALESCE(ghl.inbound_rate, 0) * 
-#                      COALESCE(COUNT(CASE WHEN tm.direction = 'inbound' THEN tm.id END), 0))
-#                 ) as sms_inbound_usage,
-#                 SUM(
-#                     (COALESCE(ghl.outbound_rate, 0) * 
-#                      COALESCE(COUNT(CASE WHEN tm.direction = 'outbound' THEN tm.id END), 0))
-#                 ) as sms_outbound_usage,
-#                 SUM(
-#                     (COALESCE(ghl.inbound_call_rate, 0) * COALESCE(ghl.call_price_ratio, 1.0) * 
-#                      COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN cr.duration ELSE 0 END), 0) / 60.0)
-#                 ) as call_inbound_usage,
-#                 SUM(
-#                     (COALESCE(ghl.outbound_call_rate, 0) * COALESCE(ghl.call_price_ratio, 1.0) * 
-#                      COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN cr.duration ELSE 0 END), 0) / 60.0)
-#                 ) as call_outbound_usage
-#             FROM core_ghlauthcredentials ghl
-#             LEFT JOIN ghl_conversation gc ON ghl.location_id = gc.location_id
-#             LEFT JOIN text_message tm ON gc.conversation_id = tm.conversation_id AND {where_clause.replace('ghl.', 'ghl.')}
-#             LEFT JOIN core_callreport cr ON ghl.id = cr.ghl_credential_id AND {where_clause.replace('tm.', 'cr.')}
-#             WHERE ghl.is_approved = TRUE
-#             GROUP BY ghl.company_id, ghl.location_id
-#         )
-#         SELECT 
-#             sms.company_id,
-#             sms.company_name,
-#             sms.locations_count,
-#             sms.total_inbound_segments,
-#             sms.total_outbound_segments,
-#             sms.total_inbound_messages,
-#             sms.total_outbound_messages,
-#             COALESCE(calls.total_inbound_calls, 0) as total_inbound_calls,
-#             COALESCE(calls.total_outbound_calls, 0) as total_outbound_calls,
-#             COALESCE(calls.total_inbound_call_duration, 0) as total_inbound_call_duration,
-#             COALESCE(calls.total_outbound_call_duration, 0) as total_outbound_call_duration,
-#             COALESCE(usage.sms_inbound_usage, 0) as sms_inbound_usage,
-#             COALESCE(usage.sms_outbound_usage, 0) as sms_outbound_usage,
-#             COALESCE(usage.call_inbound_usage, 0) as call_inbound_usage,
-#             COALESCE(usage.call_outbound_usage, 0) as call_outbound_usage
-#         FROM company_sms_stats sms
-#         LEFT JOIN company_call_stats calls ON sms.company_id = calls.company_id
-#         LEFT JOIN company_usage_calc usage ON sms.company_id = usage.company_id
-#         ORDER BY sms.company_name
-#         """
-
-#         with connection.cursor() as cursor:
-#             cursor.execute(sql, params)
-#             columns = [col[0] for col in cursor.description]
-#             results = []
-            
-#             for row in cursor.fetchall():
-#                 data = dict(zip(columns, row))
-                
-#                 sms_inbound_usage = Decimal(str(data['sms_inbound_usage'] or 0))
-#                 sms_outbound_usage = Decimal(str(data['sms_outbound_usage'] or 0))
-#                 call_inbound_usage = Decimal(str(data['call_inbound_usage'] or 0))
-#                 call_outbound_usage = Decimal(str(data['call_outbound_usage'] or 0))
-                
-#                 total_inbound_usage = sms_inbound_usage + call_inbound_usage
-#                 total_outbound_usage = sms_outbound_usage + call_outbound_usage
-#                 total_usage = total_inbound_usage + total_outbound_usage
-                
-#                 total_inbound_call_minutes = Decimal(str(data['total_inbound_call_duration'])) / Decimal('60')
-#                 total_outbound_call_minutes = Decimal(str(data['total_outbound_call_duration'])) / Decimal('60')
-                
-#                 results.append({
-#                     'company_name': data['company_name'],
-#                     'company_id': data['company_id'],
-#                     'locations_count': data['locations_count'],
-#                     # SMS Data
-#                     'total_inbound_segments': data['total_inbound_segments'],
-#                     'total_outbound_segments': data['total_outbound_segments'],
-#                     'total_inbound_messages': data['total_inbound_messages'],
-#                     'total_outbound_messages': data['total_outbound_messages'],
-#                     'sms_inbound_usage': sms_inbound_usage,
-#                     'sms_outbound_usage': sms_outbound_usage,
-#                     # Call Data
-#                     'total_inbound_calls': data['total_inbound_calls'],
-#                     'total_outbound_calls': data['total_outbound_calls'],
-#                     'total_inbound_call_duration': data['total_inbound_call_duration'],
-#                     'total_outbound_call_duration': data['total_outbound_call_duration'],
-#                     'total_inbound_call_minutes': total_inbound_call_minutes,
-#                     'total_outbound_call_minutes': total_outbound_call_minutes,
-#                     'call_inbound_usage': call_inbound_usage,
-#                     'call_outbound_usage': call_outbound_usage,
-#                     # Combined Totals
-#                     'total_inbound_usage': total_inbound_usage,
-#                     'total_outbound_usage': total_outbound_usage,
-#                     'total_usage': total_usage,
-#                 })
-        
-#         return results
-
-#     @action(detail=False, methods=['post'], url_path='usage-analytics')
-#     def get_usage_analytics(self, request):
-#         """
-#         Optimized usage analytics endpoint
-#         """
-#         request_serializer = AnalyticsRequestSerializer(data=request.data)
-#         if not request_serializer.is_valid():
-#             return Response(request_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-#         validated_data = request_serializer.validated_data
-#         view_type = validated_data.get('view_type', 'account')
-#         filters = {
-#             'date_range': validated_data.get('date_range'),
-#             'category': validated_data.get('category'),
-#             'company_id': validated_data.get('company_id'),
-#         }
-
-#         try:
-#             if view_type == 'account':
-#                 data = self.get_account_view_data(filters)
-#                 serializer_class = AccountViewWithCallsSerializer
-#             else:
-#                 data = self.get_company_view_data(filters)
-#                 serializer_class = CompanyViewWithCallsSerializer
-
-#             request.custom_metadata = {
-#                 'view_type': view_type,
-#                 'filters_applied': {k: v for k, v in filters.items() if v is not None},
-#                 'total_results_count': len(data),
-#             }
-
-#             page = self.paginate_queryset(data)
-#             if page is not None:
-#                 serializer = serializer_class(page, many=True)
-#                 return self.get_paginated_response(serializer.data)
-#             else:
-#                 serializer = serializer_class(data, many=True)
-#                 return Response({
-#                     'view_type': view_type,
-#                     'filters_applied': {k: v for k, v in filters.items() if v is not None},
-#                     'results_count': len(data),
-#                     'data': serializer.data
-#                 }, status=status.HTTP_200_OK)
-
-#         except Exception as e:
-#             return Response(
-#                 {'error': f'Failed to fetch analytics data: {str(e)}'},
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
-#             )
-
-#     def get_optimized_bar_graph_data_daily(self, filters, data_type, view_type):
-#         """
-#         Highly optimized daily bar graph data using raw SQL with date generation
-#         """
-#         date_range = filters.get('date_range')
-#         if not date_range:
-#             return []
-
-#         # Generate date series in SQL for filling gaps
-#         start_date = date_range['start'].strftime('%Y-%m-%d')
-#         end_date = date_range['end'].strftime('%Y-%m-%d')
-        
-#         where_conditions = []
-#         params = [start_date, end_date]
-        
-#         if filters.get('location_ids') and view_type == 'account':
-#             placeholders = ','.join(['%s'] * len(filters['location_ids']))
-#             where_conditions.append(f"ghl.location_id IN ({placeholders})")
-#             params.extend(filters['location_ids'])
-#         elif filters.get('company_ids') and view_type == 'company':
-#             placeholders = ','.join(['%s'] * len(filters['company_ids']))
-#             where_conditions.append(f"ghl.company_id IN ({placeholders})")
-#             params.extend(filters['company_ids'])
-            
-#         if filters.get('category_id'):
-#             where_conditions.append("ghl.category_id = %s")
-#             params.append(filters['category_id'])
-
-#         additional_where = " AND " + " AND ".join(where_conditions) if where_conditions else ""
-
-#         # Optimized SQL with date series generation
-#         sql = f"""
-#         WITH RECURSIVE date_series AS (
-#             SELECT %s::date as period_date
-#             UNION ALL
-#             SELECT period_date + INTERVAL '1 day'
-#             FROM date_series
-#             WHERE period_date < %s::date
-#         ),
-#         aggregated_data AS (
-#             SELECT 
-#                 DATE(COALESCE(tm.date_added, cr.date_added)) as period_date,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN 1 ELSE 0 END), 0) as inbound_messages,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN 1 ELSE 0 END), 0) as outbound_messages,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN tm.segments ELSE 0 END), 0) as inbound_segments,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN tm.segments ELSE 0 END), 0) as outbound_segments,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN 1 ELSE 0 END), 0) as inbound_calls,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN 1 ELSE 0 END), 0) as outbound_calls,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN cr.duration ELSE 0 END), 0) as inbound_duration,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN cr.duration ELSE 0 END), 0) as outbound_duration,
-#                 AVG(COALESCE(ghl.inbound_rate, 0)) as avg_sms_inbound_rate,
-#                 AVG(COALESCE(ghl.outbound_rate, 0)) as avg_sms_outbound_rate,
-#                 AVG(COALESCE(ghl.inbound_call_rate, 0) * COALESCE(ghl.call_price_ratio, 1.0)) as avg_call_inbound_rate,
-#                 AVG(COALESCE(ghl.outbound_call_rate, 0) * COALESCE(ghl.call_price_ratio, 1.0)) as avg_call_outbound_rate
-#             FROM core_ghlauthcredentials ghl
-#             LEFT JOIN ghl_conversation gc ON ghl.location_id = gc.location_id
-#             LEFT JOIN text_message tm ON gc.conversation_id = tm.conversation_id 
-#                 AND tm.date_added >= %s::date AND tm.date_added <= %s::date + INTERVAL '1 day'
-#             LEFT JOIN core_callreport cr ON ghl.id = cr.ghl_credential_id 
-#                 AND cr.date_added >= %s::date AND cr.date_added <= %s::date + INTERVAL '1 day'
-#             WHERE ghl.is_approved = TRUE {additional_where}
-#             GROUP BY DATE(COALESCE(tm.date_added, cr.date_added))
-#             HAVING DATE(COALESCE(tm.date_added, cr.date_added)) IS NOT NULL
-#         )
-#         SELECT 
-#             ds.period_date,
-#             COALESCE(ad.inbound_messages, 0) as inbound_messages,
-#             COALESCE(ad.outbound_messages, 0) as outbound_messages,
-#             COALESCE(ad.inbound_segments, 0) as inbound_segments,
-#             COALESCE(ad.outbound_segments, 0) as outbound_segments,
-#             COALESCE(ad.inbound_calls, 0) as inbound_calls,
-#             COALESCE(ad.outbound_calls, 0) as outbound_calls,
-#             COALESCE(ad.inbound_duration, 0) as inbound_duration,
-#             COALESCE(ad.outbound_duration, 0) as outbound_duration,
-#             COALESCE(ad.avg_sms_inbound_rate, 0) as avg_sms_inbound_rate,
-#             COALESCE(ad.avg_sms_outbound_rate, 0) as avg_sms_outbound_rate,
-#             COALESCE(ad.avg_call_inbound_rate, 0) as avg_call_inbound_rate,
-#             COALESCE(ad.avg_call_outbound_rate, 0) as avg_call_outbound_rate
-#         FROM date_series ds
-#         LEFT JOIN aggregated_data ad ON ds.period_date = ad.period_date
-#         ORDER BY ds.period_date
-#         """
-        
-#         # Add date parameters for the filtering clauses
-#         params = [start_date, end_date] + params + [start_date, end_date, start_date, end_date]
-
-#         with connection.cursor() as cursor:
-#             cursor.execute(sql, params)
-#             columns = [col[0] for col in cursor.description]
-            
-#             results = []
-#             for row in cursor.fetchall():
-#                 data = dict(zip(columns, row))
-#                 period_str = data['period_date'].strftime('%Y-%m-%d')
-                
-#                 result_item = {
-#                     'period': period_str,
-#                     'period_date': data['period_date'],
-#                 }
-                
-#                 if data_type in ['sms', 'both']:
-#                     sms_inbound_usage = float(data['avg_sms_inbound_rate']) * data['inbound_messages']
-#                     sms_outbound_usage = float(data['avg_sms_outbound_rate']) * data['outbound_messages']
-                    
-#                     result_item['sms_data'] = {
-#                         'total_messages': data['inbound_messages'] + data['outbound_messages'],
-#                         'total_segments': data['inbound_segments'] + data['outbound_segments'],
-#                         'inbound_messages': data['inbound_messages'],
-#                         'outbound_messages': data['outbound_messages'],
-#                         'inbound_segments': data['inbound_segments'],
-#                         'outbound_segments': data['outbound_segments'],
-#                         'inbound_usage': sms_inbound_usage,
-#                         'outbound_usage': sms_outbound_usage,
-#                         'total_usage': sms_inbound_usage + sms_outbound_usage
-#                     }
-                
-#                 if data_type in ['call', 'both']:
-#                     call_inbound_usage = float(data['avg_call_inbound_rate']) * (data['inbound_duration'] / 60.0)
-#                     call_outbound_usage = float(data['avg_call_outbound_rate']) * (data['outbound_duration'] / 60.0)
-                    
-#                     result_item['call_data'] = {
-#                         'total_calls': data['inbound_calls'] + data['outbound_calls'],
-#                         'total_duration': data['inbound_duration'] + data['outbound_duration'],
-#                         'inbound_calls': data['inbound_calls'],
-#                         'outbound_calls': data['outbound_calls'],
-#                         'inbound_duration': data['inbound_duration'],
-#                         'outbound_duration': data['outbound_duration'],
-#                         'inbound_minutes': data['inbound_duration'] / 60.0,
-#                         'outbound_minutes': data['outbound_duration'] / 60.0,
-#                         'inbound_usage': call_inbound_usage,
-#                         'outbound_usage': call_outbound_usage,
-#                         'total_usage': call_inbound_usage + call_outbound_usage
-#                     }
-                
-#                 if data_type == 'both' and 'sms_data' in result_item and 'call_data' in result_item:
-#                     result_item['combined_usage'] = {
-#                         'total_inbound_usage': result_item['sms_data']['inbound_usage'] + result_item['call_data']['inbound_usage'],
-#                         'total_outbound_usage': result_item['sms_data']['outbound_usage'] + result_item['call_data']['outbound_usage'],
-#                         'total_usage': result_item['sms_data']['total_usage'] + result_item['call_data']['total_usage']
-#                     }
-                
-#                 results.append(result_item)
-        
-#         return results
-
-#     @action(detail=False, methods=['post'], url_path='bar-graph-analytics')
-#     def get_bar_graph_analytics(self, request):
-#         """
-#         Optimized bar graph analytics endpoint
-#         """
-#         request_serializer = BarGraphAnalyticsRequestSerializer(data=request.data)
-#         if not request_serializer.is_valid():
-#             return Response(request_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-#         validated_data = request_serializer.validated_data
-#         date_range = validated_data.get('date_range')
-#         location_ids = validated_data.get('location_ids', [])
-#         company_ids = validated_data.get('company_ids', [])
-#         graph_type = validated_data.get('graph_type', 'daily')
-#         data_type = validated_data.get('data_type', 'both')
-#         view_type = validated_data.get('view_type', 'account')
-#         category_id = validated_data.get('category_id', 0)
-
-#         try:
-#             base_filters = {}
-#             if category_id:
-#                 base_filters["category_id"] = category_id
-#             if date_range:
-#                 base_filters['date_range'] = date_range
-#             if view_type == 'account' and location_ids:
-#                 base_filters['location_ids'] = location_ids
-#             elif view_type == 'company' and company_ids:
-#                 base_filters['company_ids'] = company_ids
-
-#             # Use optimized methods based on graph type
-#             if graph_type == 'daily':
-#                 data = self.get_optimized_bar_graph_data_daily(base_filters, data_type, view_type)
-#             elif graph_type == 'weekly':
-#                 data = self.get_optimized_bar_graph_data_weekly(base_filters, data_type, view_type)
-#             elif graph_type == 'monthly':
-#                 data = self.get_optimized_bar_graph_data_monthly(base_filters, data_type, view_type)
-#             else:
-#                 return Response(
-#                     {'error': 'Invalid graph_type. Must be daily, weekly, or monthly'},
-#                     status=status.HTTP_400_BAD_REQUEST
-#                 )
-
-#             return Response({
-#                 'view_type': view_type,
-#                 'graph_type': graph_type,
-#                 'data_type': data_type,
-#                 'date_range': date_range,
-#                 'location_ids': location_ids if view_type == 'account' else None,
-#                 'company_ids': company_ids if view_type == 'company' else None,
-#                 'data': data
-#             }, status=status.HTTP_200_OK)
-
-#         except Exception as e:
-#             import traceback
-#             traceback.print_exc()
-#             return Response(
-#                 {'error': f'Failed to fetch bar graph analytics: {str(e)}'},
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
-#             )
-
-#     def get_optimized_bar_graph_data_weekly(self, filters, data_type, view_type):
-#         """
-#         Optimized weekly bar graph data using raw SQL
-#         """
-#         date_range = filters.get('date_range')
-#         if not date_range:
-#             return []
-
-#         start_date = date_range['start'].strftime('%Y-%m-%d')
-#         end_date = date_range['end'].strftime('%Y-%m-%d')
-        
-#         where_conditions = []
-#         params = [start_date, end_date]
-        
-#         if filters.get('location_ids') and view_type == 'account':
-#             placeholders = ','.join(['%s'] * len(filters['location_ids']))
-#             where_conditions.append(f"ghl.location_id IN ({placeholders})")
-#             params.extend(filters['location_ids'])
-#         elif filters.get('company_ids') and view_type == 'company':
-#             placeholders = ','.join(['%s'] * len(filters['company_ids']))
-#             where_conditions.append(f"ghl.company_id IN ({placeholders})")
-#             params.extend(filters['company_ids'])
-            
-#         if filters.get('category_id'):
-#             where_conditions.append("ghl.category_id = %s")
-#             params.append(filters['category_id'])
-
-#         additional_where = " AND " + " AND ".join(where_conditions) if where_conditions else ""
-
-#         sql = f"""
-#         WITH RECURSIVE week_series AS (
-#             SELECT DATE_TRUNC('week', %s::date) as period_date
-#             UNION ALL
-#             SELECT period_date + INTERVAL '1 week'
-#             FROM week_series
-#             WHERE period_date < DATE_TRUNC('week', %s::date)
-#         ),
-#         aggregated_data AS (
-#             SELECT 
-#                 DATE_TRUNC('week', COALESCE(tm.date_added, cr.date_added)) as period_date,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN 1 ELSE 0 END), 0) as inbound_messages,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN 1 ELSE 0 END), 0) as outbound_messages,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN tm.segments ELSE 0 END), 0) as inbound_segments,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN tm.segments ELSE 0 END), 0) as outbound_segments,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN 1 ELSE 0 END), 0) as inbound_calls,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN 1 ELSE 0 END), 0) as outbound_calls,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN cr.duration ELSE 0 END), 0) as inbound_duration,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN cr.duration ELSE 0 END), 0) as outbound_duration,
-#                 AVG(COALESCE(ghl.inbound_rate, 0)) as avg_sms_inbound_rate,
-#                 AVG(COALESCE(ghl.outbound_rate, 0)) as avg_sms_outbound_rate,
-#                 AVG(COALESCE(ghl.inbound_call_rate, 0) * COALESCE(ghl.call_price_ratio, 1.0)) as avg_call_inbound_rate,
-#                 AVG(COALESCE(ghl.outbound_call_rate, 0) * COALESCE(ghl.call_price_ratio, 1.0)) as avg_call_outbound_rate
-#             FROM core_ghlauthcredentials ghl
-#             LEFT JOIN ghl_conversation gc ON ghl.location_id = gc.location_id
-#             LEFT JOIN text_message tm ON gc.conversation_id = tm.conversation_id 
-#                 AND tm.date_added >= %s::date AND tm.date_added <= %s::date + INTERVAL '1 day'
-#             LEFT JOIN core_callreport cr ON ghl.id = cr.ghl_credential_id 
-#                 AND cr.date_added >= %s::date AND cr.date_added <= %s::date + INTERVAL '1 day'
-#             WHERE ghl.is_approved = TRUE {additional_where}
-#             GROUP BY DATE_TRUNC('week', COALESCE(tm.date_added, cr.date_added))
-#             HAVING DATE_TRUNC('week', COALESCE(tm.date_added, cr.date_added)) IS NOT NULL
-#         )
-#         SELECT 
-#             ws.period_date,
-#             COALESCE(ad.inbound_messages, 0) as inbound_messages,
-#             COALESCE(ad.outbound_messages, 0) as outbound_messages,
-#             COALESCE(ad.inbound_segments, 0) as inbound_segments,
-#             COALESCE(ad.outbound_segments, 0) as outbound_segments,
-#             COALESCE(ad.inbound_calls, 0) as inbound_calls,
-#             COALESCE(ad.outbound_calls, 0) as outbound_calls,
-#             COALESCE(ad.inbound_duration, 0) as inbound_duration,
-#             COALESCE(ad.outbound_duration, 0) as outbound_duration,
-#             COALESCE(ad.avg_sms_inbound_rate, 0) as avg_sms_inbound_rate,
-#             COALESCE(ad.avg_sms_outbound_rate, 0) as avg_sms_outbound_rate,
-#             COALESCE(ad.avg_call_inbound_rate, 0) as avg_call_inbound_rate,
-#             COALESCE(ad.avg_call_outbound_rate, 0) as avg_call_outbound_rate
-#         FROM week_series ws
-#         LEFT JOIN aggregated_data ad ON ws.period_date = ad.period_date
-#         ORDER BY ws.period_date
-#         """
-        
-#         params = [start_date, end_date] + params + [start_date, end_date, start_date, end_date]
-#         return self._execute_bar_graph_query(sql, params, data_type)
-
-#     def get_optimized_bar_graph_data_monthly(self, filters, data_type, view_type):
-#         """
-#         Optimized monthly bar graph data using raw SQL
-#         """
-#         date_range = filters.get('date_range')
-#         if not date_range:
-#             return []
-
-#         start_date = date_range['start'].strftime('%Y-%m-%d')
-#         end_date = date_range['end'].strftime('%Y-%m-%d')
-        
-#         where_conditions = []
-#         params = [start_date, end_date]
-        
-#         if filters.get('location_ids') and view_type == 'account':
-#             placeholders = ','.join(['%s'] * len(filters['location_ids']))
-#             where_conditions.append(f"ghl.location_id IN ({placeholders})")
-#             params.extend(filters['location_ids'])
-#         elif filters.get('company_ids') and view_type == 'company':
-#             placeholders = ','.join(['%s'] * len(filters['company_ids']))
-#             where_conditions.append(f"ghl.company_id IN ({placeholders})")
-#             params.extend(filters['company_ids'])
-            
-#         if filters.get('category_id'):
-#             where_conditions.append("ghl.category_id = %s")
-#             params.append(filters['category_id'])
-
-#         additional_where = " AND " + " AND ".join(where_conditions) if where_conditions else ""
-
-#         sql = f"""
-#         WITH RECURSIVE month_series AS (
-#             SELECT DATE_TRUNC('month', %s::date) as period_date
-#             UNION ALL
-#             SELECT period_date + INTERVAL '1 month'
-#             FROM month_series
-#             WHERE period_date < DATE_TRUNC('month', %s::date)
-#         ),
-#         aggregated_data AS (
-#             SELECT 
-#                 DATE_TRUNC('month', COALESCE(tm.date_added, cr.date_added)) as period_date,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN 1 ELSE 0 END), 0) as inbound_messages,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN 1 ELSE 0 END), 0) as outbound_messages,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN tm.segments ELSE 0 END), 0) as inbound_segments,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN tm.segments ELSE 0 END), 0) as outbound_segments,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN 1 ELSE 0 END), 0) as inbound_calls,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN 1 ELSE 0 END), 0) as outbound_calls,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN cr.duration ELSE 0 END), 0) as inbound_duration,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN cr.duration ELSE 0 END), 0) as outbound_duration,
-#                 AVG(COALESCE(ghl.inbound_rate, 0)) as avg_sms_inbound_rate,
-#                 AVG(COALESCE(ghl.outbound_rate, 0)) as avg_sms_outbound_rate,
-#                 AVG(COALESCE(ghl.inbound_call_rate, 0) * COALESCE(ghl.call_price_ratio, 1.0)) as avg_call_inbound_rate,
-#                 AVG(COALESCE(ghl.outbound_call_rate, 0) * COALESCE(ghl.call_price_ratio, 1.0)) as avg_call_outbound_rate
-#             FROM core_ghlauthcredentials ghl
-#             LEFT JOIN ghl_conversation gc ON ghl.location_id = gc.location_id
-#             LEFT JOIN text_message tm ON gc.conversation_id = tm.conversation_id 
-#                 AND tm.date_added >= %s::date AND tm.date_added <= %s::date + INTERVAL '1 day'
-#             LEFT JOIN core_callreport cr ON ghl.id = cr.ghl_credential_id 
-#                 AND cr.date_added >= %s::date AND cr.date_added <= %s::date + INTERVAL '1 day'
-#             WHERE ghl.is_approved = TRUE {additional_where}
-#             GROUP BY DATE_TRUNC('month', COALESCE(tm.date_added, cr.date_added))
-#             HAVING DATE_TRUNC('month', COALESCE(tm.date_added, cr.date_added)) IS NOT NULL
-#         )
-#         SELECT 
-#             ms.period_date,
-#             COALESCE(ad.inbound_messages, 0) as inbound_messages,
-#             COALESCE(ad.outbound_messages, 0) as outbound_messages,
-#             COALESCE(ad.inbound_segments, 0) as inbound_segments,
-#             COALESCE(ad.outbound_segments, 0) as outbound_segments,
-#             COALESCE(ad.inbound_calls, 0) as inbound_calls,
-#             COALESCE(ad.outbound_calls, 0) as outbound_calls,
-#             COALESCE(ad.inbound_duration, 0) as inbound_duration,
-#             COALESCE(ad.outbound_duration, 0) as outbound_duration,
-#             COALESCE(ad.avg_sms_inbound_rate, 0) as avg_sms_inbound_rate,
-#             COALESCE(ad.avg_sms_outbound_rate, 0) as avg_sms_outbound_rate,
-#             COALESCE(ad.avg_call_inbound_rate, 0) as avg_call_inbound_rate,
-#             COALESCE(ad.avg_call_outbound_rate, 0) as avg_call_outbound_rate
-#         FROM month_series ms
-#         LEFT JOIN aggregated_data ad ON ms.period_date = ad.period_date
-#         ORDER BY ms.period_date
-#         """
-        
-#         params = [start_date, end_date] + params + [start_date, end_date, start_date, end_date]
-#         return self._execute_bar_graph_query(sql, params, data_type)
-
-#     def _execute_bar_graph_query(self, sql, params, data_type):
-#         """
-#         Helper method to execute bar graph queries and format results
-#         """
-#         with connection.cursor() as cursor:
-#             cursor.execute(sql, params)
-#             columns = [col[0] for col in cursor.description]
-            
-#             results = []
-#             for row in cursor.fetchall():
-#                 data = dict(zip(columns, row))
-#                 period_str = data['period_date'].strftime('%Y-%m-%d')
-                
-#                 result_item = {
-#                     'period': period_str,
-#                     'period_date': data['period_date'],
-#                 }
-                
-#                 if data_type in ['sms', 'both']:
-#                     sms_inbound_usage = float(data['avg_sms_inbound_rate']) * data['inbound_messages']
-#                     sms_outbound_usage = float(data['avg_sms_outbound_rate']) * data['outbound_messages']
-                    
-#                     result_item['sms_data'] = {
-#                         'total_messages': data['inbound_messages'] + data['outbound_messages'],
-#                         'total_segments': data['inbound_segments'] + data['outbound_segments'],
-#                         'inbound_messages': data['inbound_messages'],
-#                         'outbound_messages': data['outbound_messages'],
-#                         'inbound_segments': data['inbound_segments'],
-#                         'outbound_segments': data['outbound_segments'],
-#                         'inbound_usage': sms_inbound_usage,
-#                         'outbound_usage': sms_outbound_usage,
-#                         'total_usage': sms_inbound_usage + sms_outbound_usage
-#                     }
-                
-#                 if data_type in ['call', 'both']:
-#                     call_inbound_usage = float(data['avg_call_inbound_rate']) * (data['inbound_duration'] / 60.0)
-#                     call_outbound_usage = float(data['avg_call_outbound_rate']) * (data['outbound_duration'] / 60.0)
-                    
-#                     result_item['call_data'] = {
-#                         'total_calls': data['inbound_calls'] + data['outbound_calls'],
-#                         'total_duration': data['inbound_duration'] + data['outbound_duration'],
-#                         'inbound_calls': data['inbound_calls'],
-#                         'outbound_calls': data['outbound_calls'],
-#                         'inbound_duration': data['inbound_duration'],
-#                         'outbound_duration': data['outbound_duration'],
-#                         'inbound_minutes': data['inbound_duration'] / 60.0,
-#                         'outbound_minutes': data['outbound_duration'] / 60.0,
-#                         'inbound_usage': call_inbound_usage,
-#                         'outbound_usage': call_outbound_usage,
-#                         'total_usage': call_inbound_usage + call_outbound_usage
-#                     }
-                
-#                 if data_type == 'both' and 'sms_data' in result_item and 'call_data' in result_item:
-#                     result_item['combined_usage'] = {
-#                         'total_inbound_usage': result_item['sms_data']['inbound_usage'] + result_item['call_data']['inbound_usage'],
-#                         'total_outbound_usage': result_item['sms_data']['outbound_usage'] + result_item['call_data']['outbound_usage'],
-#                         'total_usage': result_item['sms_data']['total_usage'] + result_item['call_data']['total_usage']
-#                     }
-                
-#                 results.append(result_item)
-        
-#         return results
-
-#     @action(detail=False, methods=['get'], url_path='usage-summary')
-#     def get_usage_summary(self, request):
-#         """
-#         Optimized usage summary using raw SQL for better performance
-#         """
-#         try:
-#             sql = """
-#             SELECT 
-#                 -- SMS statistics
-#                 COALESCE(COUNT(tm.id), 0) as total_messages,
-#                 COALESCE(SUM(tm.segments), 0) as total_segments,
-#                 COALESCE(COUNT(CASE WHEN tm.direction = 'inbound' THEN tm.id END), 0) as total_inbound_messages,
-#                 COALESCE(COUNT(CASE WHEN tm.direction = 'outbound' THEN tm.id END), 0) as total_outbound_messages,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'inbound' THEN tm.segments ELSE 0 END), 0) as total_inbound_segments,
-#                 COALESCE(SUM(CASE WHEN tm.direction = 'outbound' THEN tm.segments ELSE 0 END), 0) as total_outbound_segments,
-#                 -- Call statistics
-#                 COALESCE(COUNT(cr.id), 0) as total_calls,
-#                 COALESCE(SUM(cr.duration), 0) as total_call_duration,
-#                 COALESCE(COUNT(CASE WHEN cr.direction = 'inbound' THEN cr.id END), 0) as total_inbound_calls,
-#                 COALESCE(COUNT(CASE WHEN cr.direction = 'outbound' THEN cr.id END), 0) as total_outbound_calls,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'inbound' THEN cr.duration ELSE 0 END), 0) as total_inbound_call_duration,
-#                 COALESCE(SUM(CASE WHEN cr.direction = 'outbound' THEN cr.duration ELSE 0 END), 0) as total_outbound_call_duration
-#             FROM text_message tm
-#             FULL OUTER JOIN core_callreport cr ON 1=1  -- Cross join to get both datasets
-#             """
-
-#             with connection.cursor() as cursor:
-#                 cursor.execute(sql)
-#                 row = cursor.fetchone()
-#                 columns = [col[0] for col in cursor.description]
-#                 data = dict(zip(columns, row))
-
-#                 return Response({
-#                     'sms_summary': {
-#                         'total_messages': data['total_messages'],
-#                         'total_segments': data['total_segments'],
-#                         'total_inbound_messages': data['total_inbound_messages'],
-#                         'total_outbound_messages': data['total_outbound_messages'],
-#                         'total_inbound_segments': data['total_inbound_segments'],
-#                         'total_outbound_segments': data['total_outbound_segments'],
-#                     },
-#                     'call_summary': {
-#                         'total_calls': data['total_calls'],
-#                         'total_call_duration': data['total_call_duration'],
-#                         'total_inbound_calls': data['total_inbound_calls'],
-#                         'total_outbound_calls': data['total_outbound_calls'],
-#                         'total_inbound_call_duration': data['total_inbound_call_duration'],
-#                         'total_outbound_call_duration': data['total_outbound_call_duration'],
-#                     },
-#                 }, status=status.HTTP_200_OK)
-
-#         except Exception as e:
-#             return Response(
-#                 {'error': f'Failed to fetch usage summary: {str(e)}'},
-#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
-#             )
-
-
+    def get_paginated_response(self, data):
+        custom_metadata = getattr(self.request, 'custom_metadata', {})
+        return Response({
+            'count': self.page.paginator.count,
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            'view_type': custom_metadata.get('view_type'),
+            'filters_applied': custom_metadata.get('filters_applied'),
+            'graph_type': custom_metadata.get('graph_type'),
+            'data_type': custom_metadata.get('data_type'),
+            'date_range': custom_metadata.get('date_range'),
+            'location_ids': custom_metadata.get('location_ids'),
+            'company_ids': custom_metadata.get('company_ids'),
+            'total_results_count': custom_metadata.get('total_results_count'),
+            'data': data
+        })
 
 
 
@@ -2407,3 +1788,15 @@ def make_api_call_view(request):
         {"message": "Api refresh task initiated for last days"},
         status=status.HTTP_200_OK
     )
+
+
+from django.views import View
+
+class RefreshSyncCallView(View):
+    def post(self, request, *args, **kwargs):
+        # Trigger the Celery task
+        task = refresh_all_sync_call_for_last_750_day.delay()
+        return JsonResponse({
+            "status": "Task triggered",
+            "task_id": task.id
+        })

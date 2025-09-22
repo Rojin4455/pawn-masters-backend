@@ -240,4 +240,16 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'core.tasks.make_api_call',
         'schedule': timedelta(hours=10)
     },
+    'generate-analytics-cache': {
+        'task': 'accounts_management_app.tasks.generate_analytics_cache',
+        # 'schedule': crontab(minute=0, hour='*/10'),  # Every 10 hours
+        'schedule': timedelta(minutes=1),
+        'args': (),  # Generate all cache types
+    },
+    'cleanup-old-cache-entries': {
+        'task': 'accounts_management_app.tasks.cleanup_old_cache_entries',
+        # 'schedule': crontab(minute=0, hour=2),  # Daily at 2 AM
+        'schedule': timedelta(minutes=2),
+        'args': (),
+    }
 }

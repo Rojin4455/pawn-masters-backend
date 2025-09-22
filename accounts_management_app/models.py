@@ -208,3 +208,104 @@ class GHLWalletBalance(models.Model):
     class Meta:
         verbose_name = "GHL Wallet Balance"
         verbose_name_plural = "GHL Wallet Balances"
+
+
+
+
+
+from django.db import models
+from django.contrib.postgres.fields import JSONField
+from django.utils import timezone
+
+class AnalyticsCache(models.Model):
+    """
+    Model to store pre-computed analytics data for faster API responses
+    """
+    CACHE_TYPES = [
+        ('usage_analytics_account', 'Usage Analytics - Account View'),
+        ('usage_analytics_company', 'Usage Analytics - Company View'),
+        ('bar_graph_daily', 'Bar Graph - Daily'),
+        ('bar_graph_weekly', 'Bar Graph - Weekly'),
+        ('bar_graph_monthly', 'Bar Graph - Monthly'),
+        ('usage_summary', 'Usage Summary'),
+    ]
+    
+    DATA_TYPES = [
+        ('sms', 'SMS'),
+        ('call', 'Call'),
+        ('both', 'Both SMS and Call'),
+    ]
+    
+    VIEW_TYPES = [
+        ('account', 'Account View'),
+        ('company', 'Company View'),
+    ]
+    
+    cache_type = models.CharField(max_length=50, choices=CACHE_TYPES)
+    view_type = models.CharField(max_length=20, choices=VIEW_TYPES, null=True, blank=True)
+    data_type = models.CharField(max_length=10, choices=DATA_TYPES, default='both')
+    
+    # Filter parameters used to generate this cache
+    date_range_start = models.DateTimeField(null=True, blank=True)
+    date_range_end = models.DateTimeField(null=True, blank=True)
+    location_ids = models.JSONField(default=list, blank=True)  # For account view
+    company_ids = models.JSONField(default=list, blank=True)   # For company view
+    category_id = models.IntegerField(null=True, blank=True)
+    
+    # The cached data
+    cached_data = models.JSONField()
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    
+    # Performance tracking
+    computation_time_seconds = models.FloatField(null=True, blank=True)
+    record_count = models.IntegerField(default=0)
+    
+    class Meta:
+        db_table = 'analytics_cache'
+        indexes = [
+            models.Index(fields=['cache_type', 'view_type', 'data_type']),
+            models.Index(fields=['created_at']),
+            models.Index(fields=['is_active']),
+        ]
+        
+    def __str__(self):
+        return f"{self.cache_type} - {self.view_type} ({self.created_at})"
+    
+    @classmethod
+    def get_cache_key(cls, cache_type, view_type=None, data_type='both', 
+                     date_range=None, location_ids=None, company_ids=None, 
+                     category_id=None):
+        """Generate a consistent cache key for lookups"""
+        key_parts = [cache_type]
+        if view_type:
+            key_parts.append(view_type)
+        if data_type != 'both':
+            key_parts.append(data_type)
+        if category_id:
+            key_parts.append(f"cat_{category_id}")
+        return "_".join(key_parts)
+
+
+class AnalyticsCacheLog(models.Model):
+    """
+    Log table to track cache generation performance and issues
+    """
+    cache_type = models.CharField(max_length=50)
+    status = models.CharField(max_length=20, choices=[
+        ('started', 'Started'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ])
+    started_at = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.FloatField(null=True, blank=True)
+    records_processed = models.IntegerField(default=0)
+    error_message = models.TextField(null=True, blank=True)
+    
+    class Meta:
+        db_table = 'analytics_cache_log'
+        ordering = ['-started_at']

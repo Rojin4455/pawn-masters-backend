@@ -32,9 +32,7 @@ class GHLAuthCredentials(models.Model):
     is_conversation_pulled = models.BooleanField(null=True, blank=True, default=False)
     is_calls_pulled = models.BooleanField(null=True, blank=True, default=False)
     segment_length = models.IntegerField(default=160, null=True, blank=True)
-    ghl_initial_refresh_token = models.TextField(null=True, blank=True) # The static token for step 1
-
-
+    ghl_initial_refresh_token = models.TextField(default="AMf-vBxpJgKf_gXOz5hcsecLl1iBjbuQRVl9Em-Jj-OrhHkxBeIffiomwxTfR8oJxaJa7rDzuEyUGa1RRMHlPGsasVdXePuU5W3FqQFxbAT5YXBa6MN8phBnwBFXbjJ9VlsyVyHOe7Zx32bHp1CLAnsArn2Rln5ZZk4CtE5o8TkjELP2XeyXo2EyQ_ns-7K5H68mKGVW9Uzs5FuRQGcYApBnXSYR_0T4dNA7CgSlk6dXfoIqzs9uCmzO0nMCgRh-B4VVXRCr3BAX1Gf1edVWKXBslciHN1fhQ3zfkB4E7ax-wu7Plc_TsOCNeppSYVKhEeA-d_tLWecsZinMHvZlpHz2enzwk1sK2P9C9GBTJ_4KQgVqr-wV2-TZbG5hxiKHAsija1AYvJfVYZmvQK1cz0MHUZ7pb2POfjPHSfRlPP4-pFXASj3I-2OgGOZ9vUSoBtLRD8B_na-cN2WbwfuLT4XlKeD0tyZn4cLl1HLv5FP0SMCR_XpR3DWWmq1XZWvUTHZKj8tiTzqfo9QVJKBf6AQQrqxGgz1QWBDn4NizRj60qr9xSdLeRwBlNVw1ZnH8TUjhMfiIuyIcud0wlCRCHebHtSW2nx_N0g") # The static token for step 1
 
     def save(self, *args, **kwargs):
         """Auto-populate rates and currency from default config if not provided"""
@@ -64,6 +62,7 @@ class GHLAuthCredentials(models.Model):
 
     def __str__(self):
         return f"{self.location_name} - {self.location_id}"
+
 
 
 class SMSDefaultConfiguration(models.Model):

@@ -584,3 +584,338 @@ def sync_wallet_balance(location_id=None, company_id=None):
     sync_results["updated_records"] = updated_count
     sync_results["failed_locations"] = failed_count
     return sync_results
+
+
+
+
+
+from django.db.models import Count, Q, Sum
+from django.utils import timezone
+from django.db.models.functions import TruncDay, TruncWeek, TruncMonth
+from django.db.models.functions import Coalesce
+from datetime import datetime, timedelta
+from core.models import CallReport
+from accounts_management_app.models import TextMessage
+from .models import AnalyticsCache
+import logging
+
+logger = logging.getLogger(__name__)
+
+class AnalyticsComputer:
+    """Utility class to compute analytics data without circular imports"""
+    
+    @staticmethod
+    def serialize_datetime_data(data):
+        """Convert datetime objects to ISO format strings for JSON serialization"""
+        if isinstance(data, dict):
+            return {k: AnalyticsComputer.serialize_datetime_data(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [AnalyticsComputer.serialize_datetime_data(item) for item in data]
+        elif isinstance(data, datetime):
+            return data.isoformat()
+        elif hasattr(data, 'isoformat'):  # Handle date objects
+            return data.isoformat()
+        else:
+            return data
+    
+    @staticmethod
+    def get_usage_summary_data():
+        """Compute usage summary data"""
+        try:
+            # Get SMS statistics
+            sms_stats = TextMessage.objects.aggregate(
+                total_messages=Coalesce(Count('id'), 0),
+                total_segments=Coalesce(Sum('segments'), 0),
+                total_inbound_messages=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                total_outbound_messages=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                total_inbound_segments=Coalesce(Sum('segments', filter=Q(direction='inbound')), 0),
+                total_outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
+            )
+
+            # Get Call statistics
+            call_stats = CallReport.objects.aggregate(
+                total_calls=Coalesce(Count('id'), 0),
+                total_call_duration=Coalesce(Sum('duration'), 0),
+                total_inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
+                total_outbound_calls=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
+                total_inbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='inbound')), 0),
+                total_outbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
+            )
+            
+            result = {
+                'sms_summary': sms_stats,
+                'call_summary': call_stats,
+                'total_records': sms_stats['total_messages'] + call_stats['total_calls'],
+                'generated_at': timezone.now().isoformat()
+            }
+            
+            return AnalyticsComputer.serialize_datetime_data(result)
+            
+        except Exception as e:
+            logger.error(f"Error computing usage summary: {str(e)}")
+            raise
+    
+    @staticmethod
+    def get_usage_analytics_data(start_date=None, end_date=None, user_id=None):
+        """Compute usage analytics data"""
+        try:
+            # Set default date range if not provided
+            if not end_date:
+                end_date = timezone.now().date()
+            if not start_date:
+                start_date = end_date - timedelta(days=30)
+            
+            # Base queryset for text messages
+            text_messages_qs = TextMessage.objects.all()
+            call_reports_qs = CallReport.objects.all()
+            
+            # Apply date filters
+            text_messages_qs = text_messages_qs.filter(
+                created_at__date__gte=start_date,
+                created_at__date__lte=end_date
+            )
+            call_reports_qs = call_reports_qs.filter(
+                created_at__date__gte=start_date,
+                created_at__date__lte=end_date
+            )
+            
+            # Apply user filter if provided
+            if user_id:
+                text_messages_qs = text_messages_qs.filter(user_id=user_id)
+                call_reports_qs = call_reports_qs.filter(user_id=user_id)
+            
+            # Compute aggregated data
+            total_messages = text_messages_qs.count()
+            total_calls = call_reports_qs.count()
+            
+            # Status breakdown for messages
+            message_status_counts = text_messages_qs.values('status').annotate(
+                count=Count('id')
+            ).order_by('status')
+            
+            # Status breakdown for calls
+            call_status_counts = call_reports_qs.values('call_status').annotate(
+                count=Count('id')
+            ).order_by('call_status')
+            
+            # Daily breakdown
+            daily_messages = text_messages_qs.annotate(
+                day=TruncDay('created_at')
+            ).values('day').annotate(
+                count=Count('id')
+            ).order_by('day')
+            
+            daily_calls = call_reports_qs.annotate(
+                day=TruncDay('created_at')
+            ).values('day').annotate(
+                count=Count('id')
+            ).order_by('day')
+            
+            result = {
+                'total_messages': total_messages,
+                'total_calls': total_calls,
+                'message_status_counts': list(message_status_counts),
+                'call_status_counts': list(call_status_counts),
+                'daily_messages': list(daily_messages),
+                'daily_calls': list(daily_calls),
+                'date_range': {
+                    'start_date': start_date.isoformat(),
+                    'end_date': end_date.isoformat()
+                }
+            }
+            
+            return AnalyticsComputer.serialize_datetime_data(result)
+            
+        except Exception as e:
+            logger.error(f"Error computing usage analytics: {str(e)}")
+            raise
+
+    @staticmethod
+    def get_company_usage_analytics_data(start_date=None, end_date=None):
+        """Compute company-level usage analytics data"""
+        try:
+            # Set default date range if not provided
+            if not end_date:
+                end_date = timezone.now().date()
+            if not start_date:
+                start_date = end_date - timedelta(days=30)
+            
+            # Get company-level aggregations - assuming we need to join through user relationship
+            company_data = TextMessage.objects.filter(
+                created_at__date__gte=start_date,
+                created_at__date__lte=end_date
+            ).values('user_id').annotate(
+                message_count=Count('id'),
+                segment_count=Sum('segments')
+            ).order_by('-message_count')
+            
+            call_data = CallReport.objects.filter(
+                created_at__date__gte=start_date,
+                created_at__date__lte=end_date
+            ).values('user_id').annotate(
+                call_count=Count('id'),
+                total_duration=Sum('duration')
+            ).order_by('-call_count')
+            
+            result = {
+                'company_message_data': list(company_data),
+                'company_call_data': list(call_data),
+                'date_range': {
+                    'start_date': start_date.isoformat(),
+                    'end_date': end_date.isoformat()
+                }
+            }
+            
+            return AnalyticsComputer.serialize_datetime_data(result)
+            
+        except Exception as e:
+            logger.error(f"Error computing company usage analytics: {str(e)}")
+            raise
+    
+    @staticmethod
+    def get_bar_graph_analytics_data(start_date=None, end_date=None, graph_type='daily', 
+                                   data_type='both', view_type='account'):
+        """Compute bar graph analytics data"""
+        try:
+            # Set default date range if not provided
+            if not end_date:
+                end_date = timezone.now().date()
+            if not start_date:
+                start_date = end_date - timedelta(days=30)
+            
+            # Choose truncation function based on graph_type
+            if graph_type == 'daily':
+                trunc_func = TruncDay
+            elif graph_type == 'weekly':
+                trunc_func = TruncWeek
+            else:  # monthly
+                trunc_func = TruncMonth
+            
+            result_data = []
+            
+            # Get message data if needed
+            if data_type in ['sms', 'both']:
+                message_qs = TextMessage.objects.filter(
+                    created_at__date__gte=start_date,
+                    created_at__date__lte=end_date
+                )
+                
+                if view_type == 'company':
+                    message_data = message_qs.annotate(
+                        period=trunc_func('created_at')
+                    ).values('period', 'user_id').annotate(
+                        count=Count('id')
+                    ).order_by('period')
+                else:
+                    message_data = message_qs.annotate(
+                        period=trunc_func('created_at')
+                    ).values('period').annotate(
+                        count=Count('id')
+                    ).order_by('period')
+                
+                result_data.extend(list(message_data))
+            
+            # Get call data if needed
+            if data_type in ['call', 'both']:
+                call_qs = CallReport.objects.filter(
+                    created_at__date__gte=start_date,
+                    created_at__date__lte=end_date
+                )
+                
+                if view_type == 'company':
+                    call_data = call_qs.annotate(
+                        period=trunc_func('created_at')
+                    ).values('period', 'user_id').annotate(
+                        count=Count('id')
+                    ).order_by('period')
+                else:
+                    call_data = call_qs.annotate(
+                        period=trunc_func('created_at')
+                    ).values('period').annotate(
+                        count=Count('id')
+                    ).order_by('period')
+                
+                result_data.extend(list(call_data))
+            
+            result = {
+                'data': result_data,
+                'total_records': len(result_data),
+                'graph_type': graph_type,
+                'data_type': data_type,
+                'view_type': view_type,
+                'date_range': {
+                    'start_date': start_date.isoformat(),
+                    'end_date': end_date.isoformat()
+                }
+            }
+            
+            return AnalyticsComputer.serialize_datetime_data(result)
+            
+        except Exception as e:
+            logger.error(f"Error computing bar graph analytics: {str(e)}")
+            raise
+
+    @staticmethod
+    def store_analytics_cache(cache_type, data, user_id=None, start_date=None, end_date=None):
+        """Store computed analytics data in cache"""
+        try:
+            # Create cache key
+            cache_key_parts = [cache_type]
+            if user_id:
+                cache_key_parts.append(f"user_{user_id}")
+            if start_date and end_date:
+                cache_key_parts.append(f"{start_date}_{end_date}")
+            
+            cache_key = "_".join(cache_key_parts)
+            
+            # Store or update cache
+            cache_obj, created = AnalyticsCache.objects.update_or_create(
+                cache_key=cache_key,
+                defaults={
+                    'cache_type': cache_type,
+                    'data': json.dumps(data),
+                    'user_id': user_id,
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'computed_at': timezone.now(),
+                    'record_count': data.get('total_messages', 0) + data.get('total_calls', 0)
+                }
+            )
+            
+            logger.info(f"{'Created' if created else 'Updated'} analytics cache: {cache_key}")
+            return cache_obj
+            
+        except Exception as e:
+            logger.error(f"Error storing analytics cache: {str(e)}")
+            raise
+
+    @staticmethod
+    def get_analytics_cache(cache_type, user_id=None, start_date=None, end_date=None, max_age_hours=10):
+        """Retrieve analytics data from cache if available and fresh"""
+        try:
+            # Create cache key
+            cache_key_parts = [cache_type]
+            if user_id:
+                cache_key_parts.append(f"user_{user_id}")
+            if start_date and end_date:
+                cache_key_parts.append(f"{start_date}_{end_date}")
+            
+            cache_key = "_".join(cache_key_parts)
+            
+            # Check for existing cache
+            cutoff_time = timezone.now() - timedelta(hours=max_age_hours)
+            
+            try:
+                cache_obj = AnalyticsCache.objects.get(
+                    cache_key=cache_key,
+                    computed_at__gte=cutoff_time
+                )
+                logger.info(f"Retrieved fresh analytics cache: {cache_key}")
+                return json.loads(cache_obj.data)
+            except AnalyticsCache.DoesNotExist:
+                logger.info(f"No fresh cache found for: {cache_key}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error retrieving analytics cache: {str(e)}")
+            return None
