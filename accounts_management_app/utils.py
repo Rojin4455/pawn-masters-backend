@@ -249,6 +249,7 @@ def fetch_calls_for_last_days_for_location(ghl_credential: GHLAuthCredentials, d
         print(f"Failed to get a valid authentication token for {ghl_credential.location_name}. Skipping call fetch.")
         return
 
+    import datetime
     def generate_date_range(days_ago_start_val, days_ago_end_val):
         today = datetime.datetime.now()
         end_date = (today - datetime.timedelta(days=days_ago_end_val)).replace(hour=18, minute=29, second=59, microsecond=999000)
