@@ -3,7 +3,7 @@ from .views import (
     GHLAuthCredentialsListView,
     GHLAuthCredentialsDetailUpdateDeleteView,
     SMSConfigurationViewSet,SMSAnalyticsViewSet, webhook_handler,
-    WalletSyncView,CallSyncView,CompanyAccountView,OptimizedSMSAnalyticsViewSet,
+    WalletSyncView,CallSyncView,CompanyAccountView,
     AccountDataForCompanyView,trigger_refresh_calls_task,trigger_refresh_conversations_task,make_api_call_view
 )
 from rest_framework.routers import DefaultRouter
