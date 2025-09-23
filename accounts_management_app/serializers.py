@@ -92,6 +92,7 @@ class AnalyticsRequestSerializer(serializers.Serializer):
     )
     category = serializers.IntegerField(required=False, help_text="Category ID filter")
     company_id = serializers.CharField(required=False, help_text="Company ID filter")
+    search = serializers.CharField(required=False, help_text="search filter")
 
     def validate_date_range(self, value):
         """Validate date_range has both start and end dates"""

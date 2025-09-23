@@ -18,7 +18,7 @@ class GHLAuthCredentials(models.Model):
     company_id = models.CharField(max_length=255, null=True, blank=True)
     location_id = models.CharField(max_length=255, null=True, blank=True)
     location_name = models.CharField(max_length=255, null=True, blank=True)
-    company_name = models.CharField(max_length=255, null=True, blank=True)
+    company_name = models.CharField(max_length=255, default="Pawn Leads")
     timezone = models.CharField(max_length=100, null=True, blank=True, default="")
     is_approved = models.BooleanField(default=False)
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='locations')

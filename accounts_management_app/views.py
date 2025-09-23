@@ -128,9 +128,16 @@ class CustomPageNumberPagination(PageNumberPagination):
         })
 
 
+from rest_framework import filters
 
 class SMSAnalyticsViewSet(viewsets.GenericViewSet):
     pagination_class = CustomPageNumberPagination
+    filter_backends = [filters.SearchFilter]
+    search_fields = [
+        'conversation__location__location_name',
+        'conversation__location__location_id',
+        'conversation__location__company_name',
+    ]
 
     """
     ViewSet for SMS and Call usage analytics with optimized queries
@@ -201,7 +208,16 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             location_queryset = location_queryset.filter(category_id=filters['category'])
         if filters.get('company_id'):
             location_queryset = location_queryset.filter(company_id=filters['company_id'])
-        
+
+
+        if filters.get('search'):
+            search_term = filters['search']
+            location_queryset = location_queryset.filter(
+                Q(location_name__icontains=search_term) |
+                Q(location_id__icontains=search_term) |
+                Q(company_name__icontains=search_term)
+            )
+            
         # Prefetch location data with rates
         location_data = {
             loc['location_id']: loc for loc in location_queryset.values(
@@ -546,6 +562,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             'date_range': validated_data.get('date_range'),
             'category': validated_data.get('category'),
             'company_id': validated_data.get('company_id'),
+            'search': validated_data.get('search'),
         }
 
         try:
