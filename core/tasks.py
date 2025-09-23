@@ -293,12 +293,16 @@ def sync_location_data_sequential(self, location_id, access_token):
         # FIXED: Get the credential object first
         credential = GHLAuthCredentials.objects.get(location_id=location_id)
         
-        log = LocationSyncLog.objects.create(
-            location=credential,  # Pass the credential object
-            status="in_progress",
-            started_at=timezone.now()
+        log, created = LocationSyncLog.objects.get_or_create(
+            location=credential,
+            finished_at__isnull=True,  # unfinished logs
+            defaults={
+                "status": "in_progress",
+                "started_at": timezone.now(),
+                "task_id": self.request.id
+            }
         )
-        
+                
         logger.info(f"Worker {self.request.hostname}: Starting sequential sync for location {location_id}")
         
         # Step 1: Fetch Contacts
@@ -317,7 +321,7 @@ def sync_location_data_sequential(self, location_id, access_token):
         logger.info(f"Worker {self.request.hostname}: Step 3/3 - Syncing calls for location {location_id}")
         log.status = "fetching_calls"
         log.save()
-        fetch_calls_for_last_days_for_location(credential, days_to_fetch=365*5)
+        fetch_calls_for_last_days_for_location(credential, days_to_fetch=365)
         
         # Mark as completed
         log.status = "success"

@@ -408,7 +408,7 @@ class SMSAnalyticsViewSet(viewsets.GenericViewSet):
             location_rates_dict = {loc['location_id']: loc for loc in company_info['locations']}
             
             # Process SMS data
-            for sms_stat in sms_company_stats:
+            for sms_stat in sms_company_stats:                
                 if sms_stat['conversation__location__company_id'] == company_id:
                     location_id = sms_stat['conversation__location__location_id']
                     direction = sms_stat['direction']
