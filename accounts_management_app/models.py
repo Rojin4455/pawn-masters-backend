@@ -308,3 +308,6 @@ class AnalyticsCacheLog(models.Model):
     class Meta:
         db_table = 'analytics_cache_log'
         ordering = ['-started_at']
+
+
+

@@ -2,7 +2,7 @@ import requests
 from celery import shared_task
 from core.models import GHLAuthCredentials,LocationSyncLog
 from decouple import config
-from accounts_management_app.utils import fetch_calls_for_last_days_for_location
+from accounts_management_app.utils import fetch_calls_for_last_days_for_location,fetch_transactions_for_location
 from accounts_management_app.services import fetch_all_contacts, sync_conversations_with_messages
 from django.utils import timezone
 
@@ -305,23 +305,30 @@ def sync_location_data_sequential(self, location_id, access_token):
                 
         logger.info(f"Worker {self.request.hostname}: Starting sequential sync for location {location_id}")
         
-        # Step 1: Fetch Contacts
-        logger.info(f"Worker {self.request.hostname}: Step 1/3 - Fetching contacts for location {location_id}")
-        log.status = "fetching_contacts"
-        log.save()
-        fetch_all_contacts(location_id, access_token)
+        # # Step 1: Fetch Contacts
+        # logger.info(f"Worker {self.request.hostname}: Step 1/3 - Fetching contacts for location {location_id}")
+        # log.status = "fetching_contacts"
+        # log.save()
+        # fetch_all_contacts(location_id, access_token)
         
-        # Step 2: Sync Conversations and Messages
-        logger.info(f"Worker {self.request.hostname}: Step 2/3 - Syncing conversations for location {location_id}")
-        log.status = "fetching_conversations"
-        log.save()
-        sync_conversations_with_messages(location_id)
+        # # Step 2: Sync Conversations and Messages
+        # logger.info(f"Worker {self.request.hostname}: Step 2/3 - Syncing conversations for location {location_id}")
+        # log.status = "fetching_conversations"
+        # log.save()
+        # sync_conversations_with_messages(location_id)
         
         # Step 3: Sync Calls
         logger.info(f"Worker {self.request.hostname}: Step 3/3 - Syncing calls for location {location_id}")
         log.status = "fetching_calls"
         log.save()
-        fetch_calls_for_last_days_for_location(credential, days_to_fetch=365)
+        fetch_calls_for_last_days_for_location(credential, days_to_fetch=370)
+
+        logger.info(f"Worker {self.request.hostname}: Step 3.1/3 - Syncing transaction for location {location_id}")
+        log.status = "fetching_transactions"
+        log.save()
+
+        fetch_transactions_for_location(ghl_credential=credential,days_ago_start=365)
+
         
         # Mark as completed
         log.status = "success"

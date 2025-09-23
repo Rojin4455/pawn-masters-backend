@@ -1,7 +1,7 @@
 import requests
 from decouple import config
 from core.serializers import FirebaseTokenSerializer, LeadConnectorAuthSerializer, IdentityToolkitAuthSerializer
-from core.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, GHLAuthCredentials, CallReport
+from core.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, GHLAuthCredentials, CallReport, GHLTransaction
 # from accounts.helpers import get_pipeline_stages, create_or_update_contact # Assuming these are still needed
 import pytz
 import datetime
@@ -921,3 +921,154 @@ class AnalyticsComputer:
         except Exception as e:
             logger.error(f"Error retrieving analytics cache: {str(e)}")
             return None
+        
+
+
+
+
+
+
+def fetch_transactions_for_location(ghl_credential: 'GHLAuthCredentials', days_ago_start=3, days_ago_end=0, page_limit=50):
+    print(f"Fetching transactions for {ghl_credential.location_name} (ID: {ghl_credential.location_id})")
+
+    token_id = get_ghl_auth_token(ghl_credential)
+    if not token_id:
+        print(f"Failed to get a valid token for {ghl_credential.location_name}.")
+        return
+
+    BASE_URL = f"https://services.leadconnectorhq.com/blade-platform/transactions/LOCATION/{ghl_credential.location_id}"
+
+    today = datetime.now()
+    start_date = (today - timedelta(days=days_ago_start)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    end_date = (today - timedelta(days=days_ago_end)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    skip = 0
+    while True:
+        payload = {
+            "companyId": ghl_credential.company_id,
+            "locationId": ghl_credential.location_id,
+            "filters": {
+                "settlementTime": {
+                    "from": start_date,
+                    "to": end_date
+                }
+            },
+            "limit": page_limit,
+            "skip": skip,
+            "timezone": "Asia/Calcutta"
+        }
+
+        headers = {
+            "Token-id": token_id,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Source": "WEB_USER",
+            "Channel": "APP",
+            "Version": "2021-04-15"
+        }
+
+        response = requests.post(BASE_URL, json=payload, headers=headers)
+
+        if response.status_code == 401:
+            token_id = get_ghl_auth_token(ghl_credential)
+            if not token_id:
+                print(f"Failed to refresh token for {ghl_credential.location_name}.")
+                break
+            headers["Token-id"] = token_id
+            continue
+
+        if response.status_code != 200:
+            print(f"Error fetching transactions: {response.status_code} - {response.text}")
+            break
+
+        data = response.json().get("data", [])
+        if not data:
+            break
+
+        to_upsert = []
+        for item in data:
+            desc = item.get("description", "")
+            message_id = None
+            if "Ref-" in desc:
+                message_id = desc.split("Ref-")[-1].strip()
+
+            # Detect transaction type
+            if "Inbound SMS" in desc:
+                transaction_type = "sms_inbound"
+            elif "Outbound SMS" in desc:
+                transaction_type = "sms_outbound"
+            elif "Inbound Call" in desc:
+                transaction_type = "call_inbound"
+            elif "Outbound Call" in desc:
+                transaction_type = "call_outbound"
+            else:
+                transaction_type = "other"
+
+            # Fetch duration for calls
+            duration = 0
+            if "Call" in desc and message_id:
+                try:
+                    call = CallReport.objects.get(message_id=message_id)
+                    duration = call.duration
+                except CallReport.DoesNotExist:
+                    duration = 0
+
+            # Build object
+            to_upsert.append(
+                GHLTransaction(
+                    transaction_id=item["id"],
+                    ghl_credential=ghl_credential,
+                    date=item.get("date"),
+                    description=desc,
+                    amount=item.get("amount"),
+                    balance=item.get("balance"),
+                    credits=item.get("credits"),
+                    total_balance=item.get("totalBalance"),
+                    message_date=item.get("messageDate"),
+                    prev_wallet_balance=item.get("prevWalletBalance"),
+                    prev_wallet_credits=item.get("prevWalletCredits"),
+                    location_name=item.get("locationName"),
+                    message_id=message_id,
+                    duration=duration,
+                    transaction_type=transaction_type,
+                )
+            )
+
+        # Bulk insert/update in one go
+        if to_upsert:
+            with transaction.atomic():
+                GHLTransaction.objects.bulk_create(
+                    to_upsert,
+                    update_conflicts=True,
+                    update_fields=[
+                        "ghl_credential", "date", "description", "amount",
+                        "balance", "credits", "total_balance", "message_date",
+                        "prev_wallet_balance", "prev_wallet_credits",
+                        "location_name", "message_id", "duration", "transaction_type",
+                    ],
+                    unique_fields=["transaction_id"],
+                )
+
+        if len(data) < page_limit:
+            break
+        skip += page_limit
+
+
+
+# def parse_date(date_str):
+#     try:
+#         return datetime.strptime(date_str, "%b %dth %Y, %I:%M:%S %p")
+#     except:
+#         return None
+
+# def fetch_call_duration(message_id, ghl_credential):
+#     """
+#     Fetch duration for a call using message_id.
+#     Implement API call if necessary or lookup in CallReport table.
+#     """
+#     try:
+#         call = CallReport.objects.filter(message_id=message_id).first()
+#         if call:
+#             return call.duration or 0
+#     except:
+#         return 0

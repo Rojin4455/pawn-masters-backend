@@ -65,6 +65,47 @@ class GHLAuthCredentials(models.Model):
 
 
 
+
+
+
+class GHLTransaction(models.Model):
+    ghl_credential = models.ForeignKey(
+        'GHLAuthCredentials',
+        on_delete=models.CASCADE,
+        related_name='transactions',
+        null=True,
+        blank=True
+    )
+
+    transaction_id = models.CharField(max_length=255, primary_key=True)
+    date = models.CharField(max_length=255, null=True, blank=True)  # Store raw string
+    description = models.TextField(null=True, blank=True)
+    amount = models.FloatField(null=True, blank=True)
+    balance = models.CharField(max_length=50, null=True, blank=True)
+    credits = models.CharField(max_length=50, null=True, blank=True)
+    total_balance = models.CharField(max_length=50, null=True, blank=True)
+    message_date = models.CharField(max_length=255, null=True, blank=True)  # Raw string
+    prev_wallet_balance = models.CharField(max_length=50, null=True, blank=True)
+    prev_wallet_credits = models.CharField(max_length=50, null=True, blank=True)
+    location_name = models.CharField(max_length=255, null=True, blank=True)
+    message_id = models.CharField(max_length=255, null=True, blank=True)
+    duration = models.IntegerField(default=0, null=True, blank=True)
+    transaction_type = models.CharField(max_length=50, null=True, blank=True)  # sms_inbound, sms_outbound, call_inbound, call_outbound, other
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date']
+        indexes = [
+            models.Index(fields=['transaction_type']),
+            models.Index(fields=['ghl_credential', 'date']),
+            models.Index(fields=['location_name', 'date']),
+        ]
+
+    def __str__(self):
+        return f"{self.transaction_type} - {self.transaction_id}"
+
+
+
 class SMSDefaultConfiguration(models.Model):
     """
     Singleton model to store default SMS configuration for the entire application
@@ -138,6 +179,7 @@ class LocationSyncLog(models.Model):
         ('fetching_contacts', 'Fetching Contacts'),
         ('fetching_conversations', 'Fetching Conversations'),
         ('fetching_calls', 'Fetching Calls'),
+        ('fetching_transactions', 'Fetching Transactions'),
         ('success', 'Success'),
         ('failed', 'Failed'),
     ]
