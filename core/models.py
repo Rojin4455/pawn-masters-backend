@@ -185,6 +185,7 @@ class LocationSyncLog(models.Model):
         ('fetching_calls', 'Fetching Calls'),
         ('fetching_transactions', 'Fetching Transactions'),
         ('success', 'Success'),
+        ('fetching_segments', 'Fetching Segments'),
         ('failed', 'Failed'),
     ]
     

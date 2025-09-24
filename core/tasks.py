@@ -331,7 +331,6 @@ def sync_location_data_sequential(self, location_id, access_token):
         
 
         log.status = "fetching_segments"
-        log.finished_at = timezone.now()
         log.save()
 
         update_sms_segments_for_location(ghl_credential=credential)
