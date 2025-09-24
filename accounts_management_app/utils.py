@@ -1280,9 +1280,9 @@ def parse_date_string(date_str, tz_str="UTC"):
 
 
 
+from django.utils.timezone import make_aware
 
-
-def update_sms_segments_for_location(ghl_credential: 'GHLAuthCredentials'):
+def update_sms_segments_for_location(ghl_credential: 'GHLAuthCredentials', daily_fetch=False):
     """
     Fetch detailed transaction info for sms_inbound and sms_outbound transactions
     and update their total_segments for all records in one go.
@@ -1303,11 +1303,17 @@ def update_sms_segments_for_location(ghl_credential: 'GHLAuthCredentials'):
         "Version": "2021-04-15"
     }
 
-    # Get all SMS transactions for this location
     qs = GHLTransaction.objects.filter(
         ghl_credential=ghl_credential,
-        transaction_type__in=["sms_inbound", "sms_outbound"]
+        transaction_type__in=["sms_inbound", "sms_outbound"],
     )
+
+    # Get all SMS transactions for this location
+    if daily_fetch:
+        today = make_aware(datetime.now())
+        yesterday = today - timedelta(days=1)
+        qs = qs.filter(parsed_date__range=(yesterday, today))
+        print(f"[INFO] Daily fetch enabled: fetching transactions from {yesterday} to {today}")
 
     total_records = qs.count()
     print(f"[INFO] Found {total_records} SMS transactions with total_segments=0 for update.")

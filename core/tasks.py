@@ -2,7 +2,7 @@ import requests
 from celery import shared_task
 from core.models import GHLAuthCredentials,LocationSyncLog
 from decouple import config
-from accounts_management_app.utils import fetch_calls_for_last_days_for_location,fetch_transactions_for_location,update_sms_segments_for_location
+from accounts_management_app.utils import fetch_calls_for_last_days_for_location,fetch_transactions_for_location,update_sms_segments_for_location, sync_wallet_balance
 from accounts_management_app.services import fetch_all_contacts, sync_conversations_with_messages
 from django.utils import timezone
 
@@ -285,7 +285,7 @@ def sync_single_location_parallel(self, location_id, access_token):
 
 # FIXED: Sequential processing with correct credential handling
 @shared_task(bind=True, max_retries=2, default_retry_delay=300)
-def sync_location_data_sequential(self, location_id, access_token):
+def sync_location_data_sequential(self, location_id, access_token, daily_fetch=False):
     """
     Sequential sync with improved logging and worker identification
     """
@@ -293,55 +293,68 @@ def sync_location_data_sequential(self, location_id, access_token):
         # FIXED: Get the credential object first
         credential = GHLAuthCredentials.objects.get(location_id=location_id)
         
-        log, created = LocationSyncLog.objects.get_or_create(
-            location=credential,
-            finished_at__isnull=True,  # unfinished logs
-            defaults={
-                "status": "in_progress",
-                "started_at": timezone.now(),
-                "task_id": self.request.id
-            }
-        )
-                
-        logger.info(f"Worker {self.request.hostname}: Starting sequential sync for location {location_id}")
-        
-        # # Step 1: Fetch Contacts
-        # logger.info(f"Worker {self.request.hostname}: Step 1/3 - Fetching contacts for location {location_id}")
-        # log.status = "fetching_contacts"
-        # log.save()
-        # fetch_all_contacts(location_id, access_token)
-        
-        # # Step 2: Sync Conversations and Messages
-        # logger.info(f"Worker {self.request.hostname}: Step 2/3 - Syncing conversations for location {location_id}")
-        # log.status = "fetching_conversations"
-        # log.save()
-        # sync_conversations_with_messages(location_id)
-        
-        # Step 3: Sync Calls
-        logger.info(f"Worker {self.request.hostname}: Step 3/3 - Syncing calls for location {location_id}")
-        log.status = "fetching_calls"
-        log.save()
-        fetch_calls_for_last_days_for_location(credential, days_to_fetch=190)
+        if daily_fetch:
+            fetch_calls_for_last_days_for_location(credential, days_to_fetch=2)
+            fetch_transactions_for_location(ghl_credential=credential,days_ago_start=2)
+            sync_wallet_balance(location_id=credential.location_id)
+            update_sms_segments_for_location(ghl_credential=credential, daily_fetch=True)
+        else:
 
-        logger.info(f"Worker {self.request.hostname}: Step 3.1/3 - Syncing transaction for location {location_id}")
-        log.status = "fetching_transactions"
-        log.save()
+            log, created = LocationSyncLog.objects.get_or_create(
+                location=credential,
+                finished_at__isnull=True,  # unfinished logs
+                defaults={
+                    "status": "in_progress",
+                    "started_at": timezone.now(),
+                    "task_id": self.request.id
+                }
+            )
+                    
+            logger.info(f"Worker {self.request.hostname}: Starting sequential sync for location {location_id}")
+            
+            # # Step 1: Fetch Contacts
+            # logger.info(f"Worker {self.request.hostname}: Step 1/3 - Fetching contacts for location {location_id}")
+            # log.status = "fetching_contacts"
+            # log.save()
+            # fetch_all_contacts(location_id, access_token)
+            
+            # # Step 2: Sync Conversations and Messages
+            # logger.info(f"Worker {self.request.hostname}: Step 2/3 - Syncing conversations for location {location_id}")
+            # log.status = "fetching_conversations"
+            # log.save()
+            # sync_conversations_with_messages(location_id)
+            
+            # Step 3: Sync Calls
+            logger.info(f"Worker {self.request.hostname}: Step 3/3 - Syncing calls for location {location_id}")
+            log.status = "fetching_calls"
+            log.save()
+            fetch_calls_for_last_days_for_location(credential, days_to_fetch=190)
 
-        fetch_transactions_for_location(ghl_credential=credential,days_ago_start=183)
-        
 
-        log.status = "fetching_segments"
-        log.save()
+            logger.info(f"Worker {self.request.hostname}: Step 3.1/3 - Syncing transaction for location {location_id}")
+            log.status = "fetching_transactions"
+            log.save()
 
-        update_sms_segments_for_location(ghl_credential=credential)
-        
-        # Mark as completed
-        log.status = "success"
-        log.finished_at = timezone.now()
-        log.save()
-        
-        logger.info(f"Worker {self.request.hostname}: Successfully completed sequential sync for location {location_id}")
-        return f"Sequential sync completed for location {location_id}"
+            fetch_transactions_for_location(ghl_credential=credential,days_ago_start=183)
+
+            
+
+            log.status = "fetching_segments"
+            log.save()
+
+            sync_wallet_balance(location_id=credential.location_id)
+
+
+            update_sms_segments_for_location(ghl_credential=credential)
+
+            
+            # Mark as completed
+            log.status = "success"
+            log.finished_at = timezone.now()
+            log.save()
+            
+            logger.info(f"Worker {self.request.hostname}: Successfully completed sequential sync for location {location_id}")
+            return f"Sequential sync completed for location {location_id}"
         
     except Exception as exc:
         logger.error(f"Worker {self.request.hostname}: Error in sequential sync for location {location_id}: {str(exc)}")
@@ -367,3 +380,44 @@ def test_task(self, message="Hello"):
     """Test task to verify worker is functioning"""
     logger.info(f"Worker {self.request.hostname}: Test task executed with message: {message}")
     return f"Test task completed on {self.request.hostname}: {message}"
+
+
+
+@shared_task
+def daily_sync_all_locations(daily_fetch=True):
+    """
+    Loop over all approved GHLAuthCredentials and trigger sequential sync for each,
+    assigning them to queues using round-robin logic.
+    """
+    credentials = GHLAuthCredentials.objects.filter(is_approved=True)
+    total_locations = credentials.count()
+    
+    print(f"[{timezone.now()}] Starting daily sync for {total_locations} locations")
+
+    queues = ['data_sync', 'celery', 'priority']
+
+    for idx, cred in enumerate(credentials):
+        # Round-robin queue selection
+        queue = queues[idx % len(queues)]
+
+        # Create a pending log
+        log = LocationSyncLog.objects.create(
+            location=cred,
+            status="pending",
+            started_at=timezone.now()
+        )
+
+        # Trigger sequential sync task on selected queue
+        result = sync_location_data_sequential.apply_async(
+            kwargs={
+                "location_id": cred.location_id,
+                "access_token": cred.access_token,
+                "daily_fetch": daily_fetch
+            },
+            queue=queue
+        )
+
+        print(f"[{timezone.now()}] GHLAuthCredentials {cred.id} scheduled! "
+              f"Sync started on queue {queue}, task_id={result.id}, log_id={log.id}")
+
+    print(f"[{timezone.now()}] Scheduled sync for all approved locations")
