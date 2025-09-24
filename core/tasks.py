@@ -2,7 +2,7 @@ import requests
 from celery import shared_task
 from core.models import GHLAuthCredentials,LocationSyncLog
 from decouple import config
-from accounts_management_app.utils import fetch_calls_for_last_days_for_location,fetch_transactions_for_location
+from accounts_management_app.utils import fetch_calls_for_last_days_for_location,fetch_transactions_for_location,update_sms_segments_for_location
 from accounts_management_app.services import fetch_all_contacts, sync_conversations_with_messages
 from django.utils import timezone
 
@@ -321,16 +321,20 @@ def sync_location_data_sequential(self, location_id, access_token):
         logger.info(f"Worker {self.request.hostname}: Step 3/3 - Syncing calls for location {location_id}")
         log.status = "fetching_calls"
         log.save()
-        fetch_calls_for_last_days_for_location(credential, days_to_fetch=370)
+        fetch_calls_for_last_days_for_location(credential, days_to_fetch=190)
 
         logger.info(f"Worker {self.request.hostname}: Step 3.1/3 - Syncing transaction for location {location_id}")
         log.status = "fetching_transactions"
         log.save()
 
-        fetch_transactions_for_location(ghl_credential=credential,days_ago_start=365)
-        
+        fetch_transactions_for_location(ghl_credential=credential,days_ago_start=183)
         
 
+        log.status = "fetching_segments"
+        log.finished_at = timezone.now()
+        log.save()
+
+        update_sms_segments_for_location(ghl_credential=credential)
         
         # Mark as completed
         log.status = "success"
