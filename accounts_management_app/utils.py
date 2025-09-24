@@ -591,7 +591,7 @@ def sync_wallet_balance(location_id=None, company_id=None):
 
 
 
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Q, Sum, F,DecimalField
 from django.utils import timezone
 from django.db.models.functions import TruncDay, TruncWeek, TruncMonth
 from django.db.models.functions import Coalesce
@@ -600,11 +600,13 @@ from core.models import CallReport
 from accounts_management_app.models import TextMessage
 from .models import AnalyticsCache
 import logging
+from decimal import Decimal
+from core.models import GHLTransaction, GHLAuthCredentials
 
 logger = logging.getLogger(__name__)
 
 class AnalyticsComputer:
-    """Utility class to compute analytics data without circular imports"""
+    """Utility class to compute analytics data using GHLTransaction model"""
     
     @staticmethod
     def serialize_datetime_data(data):
@@ -617,31 +619,40 @@ class AnalyticsComputer:
             return data.isoformat()
         elif hasattr(data, 'isoformat'):  # Handle date objects
             return data.isoformat()
+        elif isinstance(data, Decimal):
+            return float(data)
         else:
             return data
     
     @staticmethod
     def get_usage_summary_data():
-        """Compute usage summary data"""
+        """Compute usage summary data from GHLTransaction model"""
         try:
-            # Get SMS statistics
-            sms_stats = TextMessage.objects.aggregate(
-                total_messages=Coalesce(Count('id'), 0),
-                total_segments=Coalesce(Sum('segments'), 0),
-                total_inbound_messages=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
-                total_outbound_messages=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
-                total_inbound_segments=Coalesce(Sum('segments', filter=Q(direction='inbound')), 0),
-                total_outbound_segments=Coalesce(Sum('segments', filter=Q(direction='outbound')), 0),
+            # Get SMS statistics from transactions
+            sms_stats = GHLTransaction.objects.filter(
+                transaction_type__in=['sms_inbound', 'sms_outbound']
+            ).aggregate(
+                total_messages=Coalesce(Count('transaction_id'), 0),
+                total_inbound_messages=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_inbound')), 0),
+                total_outbound_messages=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_outbound')), 0),
+                total_sms_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type__in=['sms_inbound', 'sms_outbound']), output_field=DecimalField()), Decimal('0')),
+                total_inbound_sms_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='sms_inbound'), output_field=DecimalField()), Decimal('0')),
+                total_outbound_sms_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='sms_outbound'), output_field=DecimalField()), Decimal('0')),
             )
 
-            # Get Call statistics
-            call_stats = CallReport.objects.aggregate(
-                total_calls=Coalesce(Count('id'), 0),
+            # Get Call statistics from transactions
+            call_stats = GHLTransaction.objects.filter(
+                transaction_type__in=['call_inbound', 'call_outbound']
+            ).aggregate(
+                total_calls=Coalesce(Count('transaction_id'), 0),
                 total_call_duration=Coalesce(Sum('duration'), 0),
-                total_inbound_calls=Coalesce(Count('id', filter=Q(direction='inbound')), 0),
-                total_outbound_calls=Coalesce(Count('id', filter=Q(direction='outbound')), 0),
-                total_inbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='inbound')), 0),
-                total_outbound_call_duration=Coalesce(Sum('duration', filter=Q(direction='outbound')), 0),
+                total_inbound_calls=Coalesce(Count('transaction_id', filter=Q(transaction_type='call_inbound')), 0),
+                total_outbound_calls=Coalesce(Count('transaction_id', filter=Q(transaction_type='call_outbound')), 0),
+                total_inbound_call_duration=Coalesce(Sum('duration', filter=Q(transaction_type='call_inbound')), 0),
+                total_outbound_call_duration=Coalesce(Sum('duration', filter=Q(transaction_type='call_outbound')), 0),
+                total_call_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type__in=['call_inbound', 'call_outbound']), output_field=DecimalField()), Decimal('0')),
+                total_inbound_call_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='call_inbound'), output_field=DecimalField()), Decimal('0')),
+                total_outbound_call_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='call_outbound'), output_field=DecimalField()), Decimal('0')),
             )
             
             result = {
@@ -658,117 +669,225 @@ class AnalyticsComputer:
             raise
     
     @staticmethod
-    def get_usage_analytics_data(start_date=None, end_date=None, user_id=None):
-        """Compute usage analytics data"""
+    def get_usage_analytics_data(start_date=None, end_date=None, category_id=None, company_id=None, search=None):
+        """Compute account-level usage analytics data using GHLTransaction model"""
         try:
-            # Set default date range if not provided
-            if not end_date:
-                end_date = timezone.now().date()
-            if not start_date:
-                start_date = end_date - timedelta(days=30)
+            # Get all approved locations with their rates
+            location_queryset = GHLAuthCredentials.objects.filter(is_approved=True)
             
-            # Base queryset for text messages
-            text_messages_qs = TextMessage.objects.all()
-            call_reports_qs = CallReport.objects.all()
+            if category_id:
+                location_queryset = location_queryset.filter(category_id=category_id)
+            if company_id:
+                location_queryset = location_queryset.filter(company_id=company_id)
+            if search:
+                location_queryset = location_queryset.filter(
+                    Q(location_name__icontains=search) |
+                    Q(location_id__icontains=search) |
+                    Q(company_name__icontains=search)
+                )
             
-            # Apply date filters
-            text_messages_qs = text_messages_qs.filter(
-                created_at__date__gte=start_date,
-                created_at__date__lte=end_date
-            )
-            call_reports_qs = call_reports_qs.filter(
-                created_at__date__gte=start_date,
-                created_at__date__lte=end_date
-            )
-            
-            # Apply user filter if provided
-            if user_id:
-                text_messages_qs = text_messages_qs.filter(user_id=user_id)
-                call_reports_qs = call_reports_qs.filter(user_id=user_id)
-            
-            # Compute aggregated data
-            total_messages = text_messages_qs.count()
-            total_calls = call_reports_qs.count()
-            
-            # Status breakdown for messages
-            message_status_counts = text_messages_qs.values('status').annotate(
-                count=Count('id')
-            ).order_by('status')
-            
-            # Status breakdown for calls
-            call_status_counts = call_reports_qs.values('call_status').annotate(
-                count=Count('id')
-            ).order_by('call_status')
-            
-            # Daily breakdown
-            daily_messages = text_messages_qs.annotate(
-                day=TruncDay('created_at')
-            ).values('day').annotate(
-                count=Count('id')
-            ).order_by('day')
-            
-            daily_calls = call_reports_qs.annotate(
-                day=TruncDay('created_at')
-            ).values('day').annotate(
-                count=Count('id')
-            ).order_by('day')
-            
-            result = {
-                'total_messages': total_messages,
-                'total_calls': total_calls,
-                'message_status_counts': list(message_status_counts),
-                'call_status_counts': list(call_status_counts),
-                'daily_messages': list(daily_messages),
-                'daily_calls': list(daily_calls),
-                'date_range': {
-                    'start_date': start_date.isoformat(),
-                    'end_date': end_date.isoformat()
-                }
+            # Get location data with rates
+            location_data = {
+                loc['location_id']: loc for loc in location_queryset.values(
+                    'location_id', 'location_name', 'company_name', 
+                    'inbound_rate', 'outbound_rate',
+                    'inbound_call_rate', 'outbound_call_rate', 'call_price_ratio'
+                )
             }
             
-            return AnalyticsComputer.serialize_datetime_data(result)
+            if not location_data:
+                return []
+
+            location_ids = list(location_data.keys())
+            
+            # Build transaction filters
+            transaction_filters = Q(
+                ghl_credential__location_id__in=location_ids,
+                ghl_credential__is_approved=True,
+                transaction_type__in=['sms_inbound', 'sms_outbound', 'call_inbound', 'call_outbound']
+            )
+            
+            if start_date and end_date:
+                transaction_filters &= Q(created_at__gte=start_date, created_at__lte=end_date)
+            
+            # Get SMS and Call statistics by location
+            transaction_stats = GHLTransaction.objects.filter(transaction_filters).values(
+                'ghl_credential__location_id'
+            ).annotate(
+                total_inbound_messages=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_inbound')), 0),
+                total_outbound_messages=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_outbound')), 0),
+                sms_inbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='sms_inbound'), output_field=DecimalField()), Decimal('0')),
+                sms_outbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='sms_outbound'), output_field=DecimalField()), Decimal('0')),
+                
+                total_inbound_calls=Coalesce(Count('transaction_id', filter=Q(transaction_type='call_inbound')), 0),
+                total_outbound_calls=Coalesce(Count('transaction_id', filter=Q(transaction_type='call_outbound')), 0),
+                total_inbound_call_duration=Coalesce(Sum('duration', filter=Q(transaction_type='call_inbound')), 0),
+                total_outbound_call_duration=Coalesce(Sum('duration', filter=Q(transaction_type='call_outbound')), 0),
+                call_inbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='call_inbound'), output_field=DecimalField()), Decimal('0')),
+                call_outbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='call_outbound'), output_field=DecimalField()), Decimal('0')),
+            )
+            
+            # Convert to dictionary for O(1) lookup
+            stats_dict = {stat['ghl_credential__location_id']: stat for stat in transaction_stats}
+            
+            # Build results
+            results = []
+            for location_id, location_info in location_data.items():
+                stats = stats_dict.get(location_id, {
+                    'total_inbound_messages': 0, 'total_outbound_messages': 0,
+                    'sms_inbound_usage': 0, 'sms_outbound_usage': 0,
+                    'total_inbound_calls': 0, 'total_outbound_calls': 0,
+                    'total_inbound_call_duration': 0, 'total_outbound_call_duration': 0,
+                    'call_inbound_usage': 0, 'call_outbound_usage': 0
+                })
+                
+                # Calculate totals
+                total_sms_usage = Decimal(str(stats['sms_inbound_usage'])) + Decimal(str(stats['sms_outbound_usage']))
+                total_call_usage = Decimal(str(stats['call_inbound_usage'])) + Decimal(str(stats['call_outbound_usage']))
+                total_usage = total_sms_usage + total_call_usage
+                
+                # Convert call duration to minutes
+                inbound_call_minutes = Decimal(str(stats['total_inbound_call_duration'])) / Decimal('60')
+                outbound_call_minutes = Decimal(str(stats['total_outbound_call_duration'])) / Decimal('60')
+                
+                results.append({
+                    'company_name': location_info.get('company_name'),
+                    'location_name': location_info.get('location_name'),
+                    'location_id': location_id,
+                    'total_inbound_messages': stats['total_inbound_messages'],
+                    'total_outbound_messages': stats['total_outbound_messages'],
+                    'sms_inbound_usage': float(stats['sms_inbound_usage']),
+                    'sms_outbound_usage': float(stats['sms_outbound_usage']),
+                    'total_sms_usage': float(total_sms_usage),
+                    'total_inbound_calls': stats['total_inbound_calls'],
+                    'total_outbound_calls': stats['total_outbound_calls'],
+                    'total_inbound_call_duration': stats['total_inbound_call_duration'],
+                    'total_outbound_call_duration': stats['total_outbound_call_duration'],
+                    'inbound_call_minutes': float(inbound_call_minutes),
+                    'outbound_call_minutes': float(outbound_call_minutes),
+                    'call_inbound_usage': float(stats['call_inbound_usage']),
+                    'call_outbound_usage': float(stats['call_outbound_usage']),
+                    'total_call_usage': float(total_call_usage),
+                    'total_inbound_usage': float(stats['sms_inbound_usage']) + float(stats['call_inbound_usage']),
+                    'total_outbound_usage': float(stats['sms_outbound_usage']) + float(stats['call_outbound_usage']),
+                    'total_usage': float(total_usage),
+                })
+            
+            # Sort by company_name, location_name
+            results.sort(key=lambda x: (x['company_name'] or '', x['location_name'] or ''))
+            
+            return AnalyticsComputer.serialize_datetime_data(results)
             
         except Exception as e:
             logger.error(f"Error computing usage analytics: {str(e)}")
             raise
 
     @staticmethod
-    def get_company_usage_analytics_data(start_date=None, end_date=None):
-        """Compute company-level usage analytics data"""
+    def get_company_usage_analytics_data(start_date=None, end_date=None, category_id=None, company_id=None):
+        """Compute company-level usage analytics data using GHLTransaction model"""
         try:
-            # Set default date range if not provided
-            if not end_date:
-                end_date = timezone.now().date()
-            if not start_date:
-                start_date = end_date - timedelta(days=30)
+            company_filter = Q(is_approved=True)
+            if category_id:
+                company_filter &= Q(category_id=category_id)
+            if company_id:
+                company_filter &= Q(company_id=company_id)
             
-            # Get company-level aggregations - assuming we need to join through user relationship
-            company_data = TextMessage.objects.filter(
-                created_at__date__gte=start_date,
-                created_at__date__lte=end_date
-            ).values('user_id').annotate(
-                message_count=Count('id'),
-                segment_count=Sum('segments')
-            ).order_by('-message_count')
+            company_data = {}
+            location_rates = GHLAuthCredentials.objects.filter(company_filter).values(
+                'company_id', 'company_name', 'location_id'
+            )
             
-            call_data = CallReport.objects.filter(
-                created_at__date__gte=start_date,
-                created_at__date__lte=end_date
-            ).values('user_id').annotate(
-                call_count=Count('id'),
-                total_duration=Sum('duration')
-            ).order_by('-call_count')
+            for item in location_rates:
+                company_id = item['company_id']
+                if company_id not in company_data:
+                    company_data[company_id] = {
+                        'company_name': item['company_name'],
+                        'locations': [],
+                        'location_count': 0
+                    }
+                company_data[company_id]['locations'].append(item['location_id'])
+                company_data[company_id]['location_count'] += 1
             
-            result = {
-                'company_message_data': list(company_data),
-                'company_call_data': list(call_data),
-                'date_range': {
-                    'start_date': start_date.isoformat(),
-                    'end_date': end_date.isoformat()
-                }
-            }
+            if not company_data:
+                return []
             
-            return AnalyticsComputer.serialize_datetime_data(result)
+            all_location_ids = []
+            for company_info in company_data.values():
+                all_location_ids.extend(company_info['locations'])
+            
+            transaction_filters = Q(
+                ghl_credential__location_id__in=all_location_ids,
+                ghl_credential__is_approved=True,
+                transaction_type__in=['sms_inbound', 'sms_outbound', 'call_inbound', 'call_outbound']
+            )
+            
+            if start_date and end_date:
+                transaction_filters &= Q(created_at__gte=start_date, created_at__lte=end_date)
+            
+            transaction_stats = GHLTransaction.objects.filter(transaction_filters).values(
+                'ghl_credential__company_id'
+            ).annotate(
+                total_inbound_messages=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_inbound')), 0),
+                total_outbound_messages=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_outbound')), 0),
+                total_inbound_segments=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_inbound')), 0),
+                total_outbound_segments=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_outbound')), 0),
+                sms_inbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='sms_inbound'), output_field=DecimalField()), Decimal('0')),
+                sms_outbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='sms_outbound'), output_field=DecimalField()), Decimal('0')),
+                
+                total_inbound_calls=Coalesce(Count('transaction_id', filter=Q(transaction_type='call_inbound')), 0),
+                total_outbound_calls=Coalesce(Count('transaction_id', filter=Q(transaction_type='call_outbound')), 0),
+                total_inbound_call_duration=Coalesce(Sum('duration', filter=Q(transaction_type='call_inbound')), 0),
+                total_outbound_call_duration=Coalesce(Sum('duration', filter=Q(transaction_type='call_outbound')), 0),
+                call_inbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='call_inbound'), output_field=DecimalField()), Decimal('0')),
+                call_outbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='call_outbound'), output_field=DecimalField()), Decimal('0')),
+            )
+            
+            stats_dict = {stat['ghl_credential__company_id']: stat for stat in transaction_stats}
+            
+            results = []
+            for company_id, company_info in company_data.items():
+                stats = stats_dict.get(company_id, {
+                    'total_inbound_messages': 0, 'total_outbound_messages': 0,
+                    'total_inbound_segments': 0, 'total_outbound_segments': 0,
+                    'sms_inbound_usage': 0, 'sms_outbound_usage': 0,
+                    'total_inbound_calls': 0, 'total_outbound_calls': 0,
+                    'total_inbound_call_duration': 0, 'total_outbound_call_duration': 0,
+                    'call_inbound_usage': 0, 'call_outbound_usage': 0
+                })
+                
+                total_sms_usage = Decimal(str(stats['sms_inbound_usage'])) + Decimal(str(stats['sms_outbound_usage']))
+                total_call_usage = Decimal(str(stats['call_inbound_usage'])) + Decimal(str(stats['call_outbound_usage']))
+                total_usage = total_sms_usage + total_call_usage
+                
+                inbound_call_minutes = Decimal(str(stats['total_inbound_call_duration'])) / Decimal('60')
+                outbound_call_minutes = Decimal(str(stats['total_outbound_call_duration'])) / Decimal('60')
+                
+                results.append({
+                    'company_name': company_info['company_name'],
+                    'company_id': company_id,
+                    'total_inbound_messages': stats['total_inbound_messages'],
+                    'total_outbound_messages': stats['total_outbound_messages'],
+                    'total_inbound_segments': stats['total_inbound_segments'],
+                    'total_outbound_segments': stats['total_outbound_segments'],
+                    'sms_inbound_usage': float(stats['sms_inbound_usage']),
+                    'sms_outbound_usage': float(stats['sms_outbound_usage']),
+                    'total_inbound_calls': stats['total_inbound_calls'],
+                    'total_outbound_calls': stats['total_outbound_calls'],
+                    'total_inbound_call_duration': stats['total_inbound_call_duration'],
+                    'total_outbound_call_duration': stats['total_outbound_call_duration'],
+                    'total_inbound_call_minutes': float(inbound_call_minutes),
+                    'total_outbound_call_minutes': float(outbound_call_minutes),
+                    'call_inbound_usage': float(stats['call_inbound_usage']),
+                    'call_outbound_usage': float(stats['call_outbound_usage']),
+                    'total_inbound_usage': float(stats['sms_inbound_usage']) + float(stats['call_inbound_usage']),
+                    'total_outbound_usage': float(stats['sms_outbound_usage']) + float(stats['call_outbound_usage']),
+                    'total_usage': float(total_usage),
+                    'locations_count': company_info['location_count'],
+                })
+            
+            results.sort(key=lambda x: x['company_name'] or '')
+            
+            return AnalyticsComputer.serialize_datetime_data(results)
             
         except Exception as e:
             logger.error(f"Error computing company usage analytics: {str(e)}")
@@ -776,16 +895,14 @@ class AnalyticsComputer:
     
     @staticmethod
     def get_bar_graph_analytics_data(start_date=None, end_date=None, graph_type='daily', 
-                                   data_type='both', view_type='account'):
-        """Compute bar graph analytics data"""
+                                   data_type='both', view_type='account', location_ids=None, company_ids=None, category_id=None):
+        """Compute bar graph analytics data using GHLTransaction model"""
         try:
-            # Set default date range if not provided
             if not end_date:
                 end_date = timezone.now().date()
             if not start_date:
                 start_date = end_date - timedelta(days=30)
             
-            # Choose truncation function based on graph_type
             if graph_type == 'daily':
                 trunc_func = TruncDay
             elif graph_type == 'weekly':
@@ -793,55 +910,108 @@ class AnalyticsComputer:
             else:  # monthly
                 trunc_func = TruncMonth
             
-            result_data = []
+            base_filters = Q(
+                ghl_credential__is_approved=True,
+                created_at__gte=start_date,
+                created_at__lte=end_date,
+                transaction_type__in=['sms_inbound', 'sms_outbound', 'call_inbound', 'call_outbound']
+            )
             
-            # Get message data if needed
+            if category_id:
+                base_filters &= Q(ghl_credential__category_id=category_id)
+            
+            if view_type == 'account' and location_ids:
+                base_filters &= Q(ghl_credential__location_id__in=location_ids)
+            elif view_type == 'company' and company_ids:
+                base_filters &= Q(ghl_credential__company_id__in=company_ids)
+            
+            result_data = {}
+            
             if data_type in ['sms', 'both']:
-                message_qs = TextMessage.objects.filter(
-                    created_at__date__gte=start_date,
-                    created_at__date__lte=end_date
-                )
+                sms_data = GHLTransaction.objects.filter(
+                    base_filters & Q(transaction_type__in=['sms_inbound', 'sms_outbound'])
+                ).annotate(
+                    period=trunc_func('created_at')
+                ).values('period').annotate(
+                    total_sms=Coalesce(Count('transaction_id'), 0),
+                    inbound_sms=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_inbound')), 0),
+                    outbound_sms=Coalesce(Count('transaction_id', filter=Q(transaction_type='sms_outbound')), 0),
+                    inbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='sms_inbound'), output_field=DecimalField()), Decimal('0')),
+                    outbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='sms_outbound'), output_field=DecimalField()), Decimal('0')),
+                    total_usage=Coalesce(Sum(F('amount') * -1, output_field=DecimalField()), Decimal('0'))
+                ).order_by('period')
                 
-                if view_type == 'company':
-                    message_data = message_qs.annotate(
-                        period=trunc_func('created_at')
-                    ).values('period', 'user_id').annotate(
-                        count=Count('id')
-                    ).order_by('period')
-                else:
-                    message_data = message_qs.annotate(
-                        period=trunc_func('created_at')
-                    ).values('period').annotate(
-                        count=Count('id')
-                    ).order_by('period')
-                
-                result_data.extend(list(message_data))
+                for item in sms_data:
+                    period_str = item['period'].strftime('%Y-%m-%d')
+                    if period_str not in result_data:
+                        result_data[period_str] = {'period': period_str, 'period_date': item['period']}
+                    
+                    result_data[period_str]['sms_data'] = {
+                        'total_sms': item['total_sms'],
+                        'inbound_sms': item['inbound_sms'],
+                        'outbound_sms': item['outbound_sms'],
+                        'inbound_usage': float(item['inbound_usage']),
+                        'outbound_usage': float(item['outbound_usage']),
+                        'total_usage': float(item['total_usage'])
+                    }
             
-            # Get call data if needed
             if data_type in ['call', 'both']:
-                call_qs = CallReport.objects.filter(
-                    created_at__date__gte=start_date,
-                    created_at__date__lte=end_date
-                )
+                call_data = GHLTransaction.objects.filter(
+                    base_filters & Q(transaction_type__in=['call_inbound', 'call_outbound'])
+                ).annotate(
+                    period=trunc_func('created_at')
+                ).values('period').annotate(
+                    total_calls=Coalesce(Count('transaction_id'), 0),
+                    inbound_calls=Coalesce(Count('transaction_id', filter=Q(transaction_type='call_inbound')), 0),
+                    outbound_calls=Coalesce(Count('transaction_id', filter=Q(transaction_type='call_outbound')), 0),
+                    total_duration=Coalesce(Sum('duration'), 0),
+                    inbound_duration=Coalesce(Sum('duration', filter=Q(transaction_type='call_inbound')), 0),
+                    outbound_duration=Coalesce(Sum('duration', filter=Q(transaction_type='call_outbound')), 0),
+                    inbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='call_inbound'), output_field=DecimalField()), Decimal('0')),
+                    outbound_usage=Coalesce(Sum(F('amount') * -1, filter=Q(transaction_type='call_outbound'), output_field=DecimalField()), Decimal('0')),
+                    total_usage=Coalesce(Sum(F('amount') * -1, output_field=DecimalField()), Decimal('0'))
+                ).order_by('period')
                 
-                if view_type == 'company':
-                    call_data = call_qs.annotate(
-                        period=trunc_func('created_at')
-                    ).values('period', 'user_id').annotate(
-                        count=Count('id')
-                    ).order_by('period')
-                else:
-                    call_data = call_qs.annotate(
-                        period=trunc_func('created_at')
-                    ).values('period').annotate(
-                        count=Count('id')
-                    ).order_by('period')
-                
-                result_data.extend(list(call_data))
+                for item in call_data:
+                    period_str = item['period'].strftime('%Y-%m-%d')
+                    if period_str not in result_data:
+                        result_data[period_str] = {'period': period_str, 'period_date': item['period']}
+                    
+                    inbound_minutes = float(item['inbound_duration']) / 60.0
+                    outbound_minutes = float(item['outbound_duration']) / 60.0
+                    total_minutes = float(item['total_duration']) / 60.0
+                    
+                    result_data[period_str]['call_data'] = {
+                        'total_calls': item['total_calls'],
+                        'inbound_calls': item['inbound_calls'],
+                        'outbound_calls': item['outbound_calls'],
+                        'total_duration': item['total_duration'],
+                        'inbound_duration': item['inbound_duration'],
+                        'outbound_duration': item['outbound_duration'],
+                        'inbound_minutes': inbound_minutes,
+                        'outbound_minutes': outbound_minutes,
+                        'total_minutes': total_minutes,
+                        'inbound_usage': float(item['inbound_usage']),
+                        'outbound_usage': float(item['outbound_usage']),
+                        'total_usage': float(item['total_usage'])
+                    }
+            
+            if data_type == 'both':
+                for period_data in result_data.values():
+                    sms_data = period_data.get('sms_data', {})
+                    call_data = period_data.get('call_data', {})
+                    
+                    period_data['combined_usage'] = {
+                        'total_inbound_usage': sms_data.get('inbound_usage', 0) + call_data.get('inbound_usage', 0),
+                        'total_outbound_usage': sms_data.get('outbound_usage', 0) + call_data.get('outbound_usage', 0),
+                        'total_usage': sms_data.get('total_usage', 0) + call_data.get('total_usage', 0)
+                    }
+            
+            result_list = sorted(result_data.values(), key=lambda x: x['period'])
             
             result = {
-                'data': result_data,
-                'total_records': len(result_data),
+                'data': result_list,
+                'total_records': len(result_list),
                 'graph_type': graph_type,
                 'data_type': data_type,
                 'view_type': view_type,
@@ -861,7 +1031,6 @@ class AnalyticsComputer:
     def store_analytics_cache(cache_type, data, user_id=None, start_date=None, end_date=None):
         """Store computed analytics data in cache"""
         try:
-            # Create cache key
             cache_key_parts = [cache_type]
             if user_id:
                 cache_key_parts.append(f"user_{user_id}")
@@ -870,7 +1039,6 @@ class AnalyticsComputer:
             
             cache_key = "_".join(cache_key_parts)
             
-            # Store or update cache
             cache_obj, created = AnalyticsCache.objects.update_or_create(
                 cache_key=cache_key,
                 defaults={
@@ -895,7 +1063,6 @@ class AnalyticsComputer:
     def get_analytics_cache(cache_type, user_id=None, start_date=None, end_date=None, max_age_hours=10):
         """Retrieve analytics data from cache if available and fresh"""
         try:
-            # Create cache key
             cache_key_parts = [cache_type]
             if user_id:
                 cache_key_parts.append(f"user_{user_id}")
@@ -904,7 +1071,6 @@ class AnalyticsComputer:
             
             cache_key = "_".join(cache_key_parts)
             
-            # Check for existing cache
             cutoff_time = timezone.now() - timedelta(hours=max_age_hours)
             
             try:
@@ -921,9 +1087,6 @@ class AnalyticsComputer:
         except Exception as e:
             logger.error(f"Error retrieving analytics cache: {str(e)}")
             return None
-        
-
-
 
 
 
@@ -1013,12 +1176,16 @@ def fetch_transactions_for_location(ghl_credential: 'GHLAuthCredentials', days_a
                 except CallReport.DoesNotExist:
                     duration = 0
 
+
+    
+
             # Build object
             to_upsert.append(
                 GHLTransaction(
                     transaction_id=item["id"],
                     ghl_credential=ghl_credential,
                     date=item.get("date"),
+                    parsed_date=parse_date_string(item.get("date"), ghl_credential.timezone),
                     description=desc,
                     amount=item.get("amount"),
                     balance=item.get("balance"),
@@ -1034,6 +1201,10 @@ def fetch_transactions_for_location(ghl_credential: 'GHLAuthCredentials', days_a
                 )
             )
 
+        # print("test: ", item.get("date"), ghl_credential.timezone)
+        # print("convert time: ",parse_date_string(item.get("date"), ghl_credential.timezone))
+        # break
+
         # Bulk insert/update in one go
         if to_upsert:
             with transaction.atomic():
@@ -1044,7 +1215,7 @@ def fetch_transactions_for_location(ghl_credential: 'GHLAuthCredentials', days_a
                         "ghl_credential", "date", "description", "amount",
                         "balance", "credits", "total_balance", "message_date",
                         "prev_wallet_balance", "prev_wallet_credits",
-                        "location_name", "message_id", "duration", "transaction_type",
+                        "location_name", "message_id", "duration", "transaction_type","parsed_date"
                     ],
                     unique_fields=["transaction_id"],
                 )
@@ -1052,6 +1223,58 @@ def fetch_transactions_for_location(ghl_credential: 'GHLAuthCredentials', days_a
         if len(data) < page_limit:
             break
         skip += page_limit
+
+
+from datetime import datetime
+import re
+import pytz
+
+def parse_date_string(date_str, tz_str="UTC"):
+    """
+    Convert GHL date string into a timezone-aware datetime using the given tz_str.
+    Example date_str: "Sep 22nd 2025, 10:28:02 PM"
+    """
+    print(f"Parsing date_str: '{date_str}' with timezone: '{tz_str}'")
+    
+    if not date_str:
+        print("Empty date_str, returning None")
+        return None
+    
+    try:
+        # Remove st/nd/rd/th
+        clean_str = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', date_str)
+        print(f"Cleaned date string: '{clean_str}'")
+        
+        # Parse naive datetime
+        naive_dt = datetime.strptime(clean_str, "%b %d %Y, %I:%M:%S %p")
+        print(f"Parsed naive datetime: {naive_dt}")
+        
+        # Convert to timezone-aware
+        try:
+            tz = pytz.timezone(tz_str) if tz_str else pytz.UTC
+        except Exception as e:
+            print(f"Invalid timezone '{tz_str}', using UTC: {e}")
+            tz = pytz.UTC
+        
+        # Use localize for naive datetime
+        try:
+            aware_dt = tz.localize(naive_dt)
+        except ValueError as e:
+            # Handle ambiguous times (DST transitions)
+            print(f"Ambiguous time, using fold=0: {e}")
+            aware_dt = tz.localize(naive_dt, is_dst=False)
+        
+        print(f"Final timezone-aware datetime: {aware_dt}")
+        return aware_dt
+        
+    except Exception as e:
+        print(f"Error parsing date '{date_str}': {e}")
+        # Fallback: try to return current time in the specified timezone
+        try:
+            tz = pytz.timezone(tz_str) if tz_str else pytz.UTC
+            return datetime.now(tz)
+        except:
+            return datetime.now(pytz.UTC)
 
 
 

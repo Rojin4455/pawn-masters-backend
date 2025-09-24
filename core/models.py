@@ -79,6 +79,7 @@ class GHLTransaction(models.Model):
 
     transaction_id = models.CharField(max_length=255, primary_key=True)
     date = models.CharField(max_length=255, null=True, blank=True)  # Store raw string
+    parsed_date = models.DateTimeField(null=True, blank=True, db_index=True)
     description = models.TextField(null=True, blank=True)
     amount = models.FloatField(null=True, blank=True)
     balance = models.CharField(max_length=50, null=True, blank=True)
@@ -96,9 +97,11 @@ class GHLTransaction(models.Model):
     class Meta:
         ordering = ['-date']
         indexes = [
+            # Retain existing, but update for better composite queries
+            models.Index(fields=['parsed_date', 'transaction_type', 'ghl_credential']),
+            models.Index(fields=['ghl_credential']),
             models.Index(fields=['transaction_type']),
-            models.Index(fields=['ghl_credential', 'date']),
-            models.Index(fields=['location_name', 'date']),
+            models.Index(fields=['parsed_date']),
         ]
 
     def __str__(self):
