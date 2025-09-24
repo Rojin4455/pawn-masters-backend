@@ -1617,6 +1617,7 @@ from collections import defaultdict
 import calendar
 
 from core.models import GHLTransaction, GHLAuthCredentials
+from accounts_management_app.models import GHLWalletBalance
 
 
 from django.db.models import Func, DateTimeField
@@ -1711,109 +1712,9 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         self.log("Base queryset count:", qs.count())
         return qs
 
-    def calculate_sms_metrics(self, transactions):
-        """Calculate SMS-related metrics from transactions"""
-        self.log("Calculating SMS metrics for queryset size:", transactions.count())
 
-        sms_inbound = transactions.filter(transaction_type='sms_inbound')
-        sms_outbound = transactions.filter(transaction_type='sms_outbound')
-        inbound_count, outbound_count = sms_inbound.count(), sms_outbound.count()
-
-        self.log("SMS inbound:", inbound_count, "outbound:", outbound_count)
-
-        return {
-            'total_inbound_messages': inbound_count,
-            'total_outbound_messages': outbound_count,
-            'sms_inbound_usage': float(sms_inbound.aggregate(total=Sum('amount'))['total'] or 0),
-            'sms_outbound_usage': float(sms_outbound.aggregate(total=Sum('amount'))['total'] or 0),
-            'total_sms_usage': float(transactions.filter(
-                transaction_type__in=['sms_inbound', 'sms_outbound']
-            ).aggregate(total=Sum('amount'))['total'] or 0)
-        }
-
-    def calculate_call_metrics(self, transactions):
-        """Calculate call-related metrics from transactions"""
-        self.log("Calculating CALL metrics for queryset size:", transactions.count())
-
-        call_inbound = transactions.filter(transaction_type='call_inbound')
-        call_outbound = transactions.filter(transaction_type='call_outbound')
-        inbound_count, outbound_count = call_inbound.count(), call_outbound.count()
-
-        self.log("CALL inbound:", inbound_count, "outbound:", outbound_count)
-
-        inbound_duration = call_inbound.aggregate(total=Sum('duration'))['total'] or 0
-        outbound_duration = call_outbound.aggregate(total=Sum('duration'))['total'] or 0
-
-        self.log("Durations - inbound:", inbound_duration, "outbound:", outbound_duration)
-
-        return {
-            'total_inbound_calls': inbound_count,
-            'total_outbound_calls': outbound_count,
-            'total_inbound_call_duration': inbound_duration,
-            'total_outbound_call_duration': outbound_duration,
-            'inbound_call_minutes': round(inbound_duration / 60, 2),
-            'outbound_call_minutes': round(outbound_duration / 60, 2),
-            'call_inbound_usage': float(call_inbound.aggregate(total=Sum('amount'))['total'] or 0),
-            'call_outbound_usage': float(call_outbound.aggregate(total=Sum('amount'))['total'] or 0)
-        }
-
-    def calculate_sms_metrics_from_list(self, transaction_list):
-        """Calculate SMS-related metrics from a list of transaction objects"""
-        self.log("Calculating SMS metrics from list of", len(transaction_list), "transactions")
-
-        sms_inbound = [t for t in transaction_list if t.transaction_type == 'sms_inbound']
-        sms_outbound = [t for t in transaction_list if t.transaction_type == 'sms_outbound']
-        
-        inbound_count = len(sms_inbound)
-        outbound_count = len(sms_outbound)
-        
-        self.log("SMS inbound:", inbound_count, "outbound:", outbound_count)
-
-        # Calculate usage amounts
-        sms_inbound_usage = sum(float(t.amount or 0) for t in sms_inbound)
-        sms_outbound_usage = sum(float(t.amount or 0) for t in sms_outbound)
-        total_sms_usage = sms_inbound_usage + sms_outbound_usage
-
-        return {
-            'total_inbound_messages': inbound_count,
-            'total_outbound_messages': outbound_count,
-            'sms_inbound_usage': sms_inbound_usage,
-            'sms_outbound_usage': sms_outbound_usage,
-            'total_sms_usage': total_sms_usage
-        }
-
-    def calculate_call_metrics_from_list(self, transaction_list):
-        """Calculate call-related metrics from a list of transaction objects"""
-        self.log("Calculating CALL metrics from list of", len(transaction_list), "transactions")
-
-        call_inbound = [t for t in transaction_list if t.transaction_type == 'call_inbound']
-        call_outbound = [t for t in transaction_list if t.transaction_type == 'call_outbound']
-        
-        inbound_count = len(call_inbound)
-        outbound_count = len(call_outbound)
-        
-        self.log("CALL inbound:", inbound_count, "outbound:", outbound_count)
-
-        # Calculate durations
-        inbound_duration = sum(int(t.duration or 0) for t in call_inbound)
-        outbound_duration = sum(int(t.duration or 0) for t in call_outbound)
-        
-        self.log("Durations - inbound:", inbound_duration, "outbound:", outbound_duration)
-
-        # Calculate usage amounts
-        call_inbound_usage = sum(float(t.amount or 0) for t in call_inbound)
-        call_outbound_usage = sum(float(t.amount or 0) for t in call_outbound)
-
-        return {
-            'total_inbound_calls': inbound_count,
-            'total_outbound_calls': outbound_count,
-            'total_inbound_call_duration': inbound_duration,
-            'total_outbound_call_duration': outbound_duration,
-            'inbound_call_minutes': round(inbound_duration / 60, 2),
-            'outbound_call_minutes': round(outbound_duration / 60, 2),
-            'call_inbound_usage': call_inbound_usage,
-            'call_outbound_usage': call_outbound_usage
-        }
+    
+    
 
     @action(detail=False, methods=['post'], url_path='usage-analytics')
     def usage_analytics(self, request):
@@ -1875,6 +1776,10 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         """
         self.log("Optimized: Computing account-level analytics")
 
+        wallet_balance_subquery = GHLWalletBalance.objects.filter(
+            ghl_credential_id=OuterRef('ghl_credential__id')
+        ).values('current_balance')[:1]
+
         # Use a single query to get all aggregations at once, grouped by location
         location_analytics = base_queryset.values(
             'ghl_credential__location_id',
@@ -1892,6 +1797,7 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             call_outbound_usage=Sum(Case(When(transaction_type='call_outbound', then=F('amount')))),
             total_inbound_call_duration=Sum(Case(When(transaction_type='call_inbound', then=F('duration')))),
             total_outbound_call_duration=Sum(Case(When(transaction_type='call_outbound', then=F('duration')))),
+            wallet_balance=Subquery(wallet_balance_subquery, output_field=DecimalField())
         )
         
         results = []
@@ -1903,6 +1809,8 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
 
             inbound_duration = int(row['total_inbound_call_duration'] or 0)
             outbound_duration = int(row['total_outbound_call_duration'] or 0)
+
+
 
             result = {
                 'company_name': row['ghl_credential__company_name'],
@@ -1928,7 +1836,8 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
                 'combined_totals': {
                     'total_inbound_usage': sms_inbound_usage + call_inbound_usage,
                     'total_outbound_usage': sms_outbound_usage + call_outbound_usage,
-                }
+                },
+                'wallet_balance': int(row['wallet_balance'] or 0)
             }
             results.append(result)
 
@@ -1942,6 +1851,12 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         self.log("Optimized: Computing company-level analytics")
 
         # Use a single query to get all aggregations at once, grouped by company
+
+        wallet_sum_subquery = GHLWalletBalance.objects.filter(
+            ghl_credential__company_id=OuterRef('ghl_credential__company_id')
+        ).values('ghl_credential__company_id').annotate(
+            total_balance=Sum('current_balance')
+        ).values('total_balance')
         company_analytics = base_queryset.values(
             'ghl_credential__company_id',
             'ghl_credential__company_name'
@@ -1956,7 +1871,9 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             call_outbound_usage=Sum(Case(When(transaction_type='call_outbound', then=F('amount')))),
             total_inbound_call_duration=Sum(Case(When(transaction_type='call_inbound', then=F('duration')))),
             total_outbound_call_duration=Sum(Case(When(transaction_type='call_outbound', then=F('duration')))),
-            locations_count=Count('ghl_credential__location_id', distinct=True)
+            locations_count=Count('ghl_credential__location_id', distinct=True),
+            wallet_total_balance=Subquery(wallet_sum_subquery, output_field=DecimalField())
+
         )
         
         results = []
@@ -1994,7 +1911,8 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
                     'total_outbound_usage': sms_outbound_usage + call_outbound_usage,
                     'total_usage': sms_inbound_usage + sms_outbound_usage + call_inbound_usage + call_outbound_usage,
                     'locations_count': row['locations_count']
-                }
+                },
+                'wallet_balance': int(row['wallet_total_balance'] or 0)
             }
             results.append(result)
             
@@ -2002,63 +1920,9 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         return results
 
 
-    def calculate_sms_metrics_from_list(self, transaction_list):
-        """Calculate SMS-related metrics from a list of transaction objects"""
-        self.log("Calculating SMS metrics from list of", len(transaction_list), "transactions")
+    
 
-        sms_inbound = [t for t in transaction_list if t.transaction_type == 'sms_inbound']
-        sms_outbound = [t for t in transaction_list if t.transaction_type == 'sms_outbound']
-        
-        inbound_count = len(sms_inbound)
-        outbound_count = len(sms_outbound)
-        
-        self.log("SMS inbound:", inbound_count, "outbound:", outbound_count)
-
-        # Calculate usage amounts
-        sms_inbound_usage = sum(float(t.amount or 0) for t in sms_inbound)
-        sms_outbound_usage = sum(float(t.amount or 0) for t in sms_outbound)
-        total_sms_usage = sms_inbound_usage + sms_outbound_usage
-
-        return {
-            'total_inbound_messages': inbound_count,
-            'total_outbound_messages': outbound_count,
-            'sms_inbound_usage': sms_inbound_usage,
-            'sms_outbound_usage': sms_outbound_usage,
-            'total_sms_usage': total_sms_usage
-        }
-
-    def calculate_call_metrics_from_list(self, transaction_list):
-        """Calculate call-related metrics from a list of transaction objects"""
-        self.log("Calculating CALL metrics from list of", len(transaction_list), "transactions")
-
-        call_inbound = [t for t in transaction_list if t.transaction_type == 'call_inbound']
-        call_outbound = [t for t in transaction_list if t.transaction_type == 'call_outbound']
-        
-        inbound_count = len(call_inbound)
-        outbound_count = len(call_outbound)
-        
-        self.log("CALL inbound:", inbound_count, "outbound:", outbound_count)
-
-        # Calculate durations
-        inbound_duration = sum(int(t.duration or 0) for t in call_inbound)
-        outbound_duration = sum(int(t.duration or 0) for t in call_outbound)
-        
-        self.log("Durations - inbound:", inbound_duration, "outbound:", outbound_duration)
-
-        # Calculate usage amounts
-        call_inbound_usage = sum(float(t.amount or 0) for t in call_inbound)
-        call_outbound_usage = sum(float(t.amount or 0) for t in call_outbound)
-
-        return {
-            'total_inbound_calls': inbound_count,
-            'total_outbound_calls': outbound_count,
-            'total_inbound_call_duration': inbound_duration,
-            'total_outbound_call_duration': outbound_duration,
-            'inbound_call_minutes': round(inbound_duration / 60, 2),
-            'outbound_call_minutes': round(outbound_duration / 60, 2),
-            'call_inbound_usage': call_inbound_usage,
-            'call_outbound_usage': call_outbound_usage
-        }
+    
 
     @action(detail=False, methods=['post'], url_path='bar-graph-analytics')
     def bar_graph_analytics(self, request):
@@ -2242,18 +2106,14 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         
         inbound_count = sms_inbound.count()
         outbound_count = sms_outbound.count()
-        total_count = inbound_count + outbound_count
         
         # Calculate segments (assuming each message can have multiple segments)
         # For now, using message count as segment count - adjust if you have segment data
-        total_segments = total_count  # This might need adjustment based on actual segment calculation
         
         inbound_usage = float(sms_inbound.aggregate(total=Sum('amount'))['total'] or 0)
         outbound_usage = float(sms_outbound.aggregate(total=Sum('amount'))['total'] or 0)
         
         return {
-            'total_messages': total_count,
-            'total_segments': total_segments,
             'inbound_messages': inbound_count,
             'outbound_messages': outbound_count,
             'inbound_usage': inbound_usage,
