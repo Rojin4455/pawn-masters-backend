@@ -328,6 +328,8 @@ def sync_location_data_sequential(self, location_id, access_token):
         log.save()
 
         fetch_transactions_for_location(ghl_credential=credential,days_ago_start=365)
+        
+        
 
         
         # Mark as completed

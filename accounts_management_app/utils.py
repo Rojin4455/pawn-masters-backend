@@ -1224,6 +1224,8 @@ def fetch_transactions_for_location(ghl_credential: 'GHLAuthCredentials', days_a
             break
         skip += page_limit
 
+        
+
 
 from datetime import datetime
 import re
@@ -1278,20 +1280,88 @@ def parse_date_string(date_str, tz_str="UTC"):
 
 
 
-# def parse_date(date_str):
-#     try:
-#         return datetime.strptime(date_str, "%b %dth %Y, %I:%M:%S %p")
-#     except:
-#         return None
 
-# def fetch_call_duration(message_id, ghl_credential):
-#     """
-#     Fetch duration for a call using message_id.
-#     Implement API call if necessary or lookup in CallReport table.
-#     """
-#     try:
-#         call = CallReport.objects.filter(message_id=message_id).first()
-#         if call:
-#             return call.duration or 0
-#     except:
-#         return 0
+
+def update_sms_segments_for_location(ghl_credential: 'GHLAuthCredentials'):
+    """
+    Fetch detailed transaction info for sms_inbound and sms_outbound transactions
+    and update their total_segments for all records in one go.
+    """
+    print(f"[START] Updating SMS segments for {ghl_credential.location_name} (ID: {ghl_credential.location_id})")
+
+    token_id = get_ghl_auth_token(ghl_credential)
+    if not token_id:
+        print(f"[ERROR] Failed to get a valid token for {ghl_credential.location_name}.")
+        return
+
+    headers = {
+        "Token-id": token_id,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Source": "WEB_USER",
+        "Channel": "APP",
+        "Version": "2021-04-15"
+    }
+
+    # Get all SMS transactions for this location
+    qs = GHLTransaction.objects.filter(
+        ghl_credential=ghl_credential,
+        transaction_type__in=["sms_inbound", "sms_outbound"]
+    )
+
+    total_records = qs.count()
+    print(f"[INFO] Found {total_records} SMS transactions with total_segments=0 for update.")
+
+    to_update = []
+    processed = 0
+    updated = 0
+    failed = 0
+
+    for tx in qs.iterator():
+        processed += 1
+        print(f"[PROCESS] ({processed}/{total_records}) Fetching details for transaction_id={tx.transaction_id}")
+
+        url = f"https://services.leadconnectorhq.com/saas_service/location-wallet/{ghl_credential.location_id}/details/{tx.transaction_id}"
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 401:
+            print(f"[WARN] Token expired while fetching transaction_id={tx.transaction_id}. Refreshing...")
+            token_id = get_ghl_auth_token(ghl_credential)
+            if not token_id:
+                print(f"[ERROR] Failed to refresh token for {ghl_credential.location_name}. Aborting.")
+                break
+            headers["Token-id"] = token_id
+            response = requests.get(url, headers=headers)
+
+        if response.status_code != 200:
+            failed += 1
+            print(f"[ERROR] Failed to fetch details for transaction_id={tx.transaction_id}: {response.status_code} - {response.text}")
+            continue
+
+        try:
+            data = response.json()
+            segments = (
+                data.get("details", {})
+                .get("eventBody", {})
+                .get("meta", {})
+                .get("segments")
+            )
+            if segments is not None:
+                tx.total_segments = segments
+                to_update.append(tx)
+                updated += 1
+                print(f"[SUCCESS] transaction_id={tx.transaction_id} -> segments={segments}")
+            else:
+                print(f"[INFO] transaction_id={tx.transaction_id} has no 'segments' field in response.")
+        except Exception as e:
+            failed += 1
+            print(f"[EXCEPTION] Parsing error for transaction_id={tx.transaction_id}: {e}")
+            continue
+
+    # Final bulk update for all collected records
+    if to_update:
+        with transaction.atomic():
+            GHLTransaction.objects.bulk_update(to_update, ["total_segments"])
+        print(f"[DB] Bulk updated {len(to_update)} records with segment counts.")
+
+    print(f"[COMPLETE] Location={ghl_credential.location_name} | Processed={processed}, Updated={updated}, Failed={failed}")

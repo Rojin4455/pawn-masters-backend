@@ -91,6 +91,7 @@ class GHLTransaction(models.Model):
     location_name = models.CharField(max_length=255, null=True, blank=True)
     message_id = models.CharField(max_length=255, null=True, blank=True)
     duration = models.IntegerField(default=0, null=True, blank=True)
+    total_segments = models.IntegerField(default=0, null=True, blank=True)
     transaction_type = models.CharField(max_length=50, null=True, blank=True)  # sms_inbound, sms_outbound, call_inbound, call_outbound, other
     created_at = models.DateTimeField(auto_now_add=True)
 

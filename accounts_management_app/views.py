@@ -1805,6 +1805,8 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             call_outbound_usage=Sum(Case(When(transaction_type='call_outbound', then=F('amount')))),
             total_inbound_call_duration=Sum(Case(When(transaction_type='call_inbound', then=F('duration')))),
             total_outbound_call_duration=Sum(Case(When(transaction_type='call_outbound', then=F('duration')))),
+            inbound_sms_segments=Sum(Case(When(transaction_type='sms_inbound', then=F('total_segments')))),
+            outbound_sms_segments=Sum(Case(When(transaction_type='sms_outbound', then=F('total_segments')))),
             wallet_balance=Subquery(wallet_balance_subquery, output_field=DecimalField())
         )
         
@@ -1818,7 +1820,8 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             inbound_duration = int(row['total_inbound_call_duration'] or 0)
             outbound_duration = int(row['total_outbound_call_duration'] or 0)
 
-
+            inbound_segments = int(row['inbound_sms_segments'] or 0)
+            outbound_segments = int(row['outbound_sms_segments'] or 0)
 
             result = {
                 'company_name': row['ghl_credential__company_name'],
@@ -1829,7 +1832,10 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
                     'total_outbound_messages': row['total_outbound_messages'],
                     'sms_inbound_usage': sms_inbound_usage,
                     'sms_outbound_usage': sms_outbound_usage,
-                    'total_sms_usage': sms_inbound_usage + sms_outbound_usage
+                    'total_sms_usage': sms_inbound_usage + sms_outbound_usage,
+                    'inbound_segments': inbound_segments,
+                    'outbound_segments': outbound_segments,
+                    'total_segments': inbound_segments + outbound_segments
                 },
                 'call_data': {
                     'total_inbound_calls': row['total_inbound_calls'],
@@ -1859,12 +1865,12 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         self.log("Optimized: Computing company-level analytics")
 
         # Use a single query to get all aggregations at once, grouped by company
-
         wallet_sum_subquery = GHLWalletBalance.objects.filter(
             ghl_credential__company_id=OuterRef('ghl_credential__company_id')
         ).values('ghl_credential__company_id').annotate(
             total_balance=Sum('current_balance')
         ).values('total_balance')
+
         company_analytics = base_queryset.values(
             'ghl_credential__company_id',
             'ghl_credential__company_name'
@@ -1881,7 +1887,6 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             total_outbound_call_duration=Sum(Case(When(transaction_type='call_outbound', then=F('duration')))),
             locations_count=Count('ghl_credential__location_id', distinct=True),
             wallet_total_balance=Subquery(wallet_sum_subquery, output_field=DecimalField())
-
         )
         
         results = []
@@ -1902,7 +1907,10 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
                     'total_outbound_messages': row['total_outbound_messages'],
                     'sms_inbound_usage': sms_inbound_usage,
                     'sms_outbound_usage': sms_outbound_usage,
-                    'total_sms_usage': sms_inbound_usage + sms_outbound_usage
+                    'total_sms_usage': sms_inbound_usage + sms_outbound_usage,
+                    # New: SMS-only inbound/outbound totals
+                    'total_inbound_sms': row['total_inbound_messages'],
+                    'total_outbound_sms': row['total_outbound_messages']
                 },
                 'call_data': {
                     'total_inbound_calls': row['total_inbound_calls'],
@@ -1926,6 +1934,7 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             
         self.log("Optimized: Returning", len(results), "company results")
         return results
+
 
 
     
@@ -2125,13 +2134,19 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         
         inbound_usage = float(sms_inbound.aggregate(total=Sum('amount'))['total'] or 0)
         outbound_usage = float(sms_outbound.aggregate(total=Sum('amount'))['total'] or 0)
+
+        inbound_segments = int(sms_inbound.aggregate(total=Sum('total_segments'))['total'] or 0)
+        outbound_segments = int(sms_outbound.aggregate(total=Sum('total_segments'))['total'] or 0)
         
         return {
             'inbound_messages': inbound_count,
             'outbound_messages': outbound_count,
             'inbound_usage': inbound_usage,
             'outbound_usage': outbound_usage,
-            'total_usage': inbound_usage + outbound_usage
+            'total_usage': inbound_usage + outbound_usage,
+            'inbound_segments': inbound_segments,
+            'outbound_segments': outbound_segments,
+            'total_segments': inbound_segments + outbound_segments
         }
 
     def calculate_period_call_metrics(self, transactions):
