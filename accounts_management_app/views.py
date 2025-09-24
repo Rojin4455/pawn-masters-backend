@@ -1702,7 +1702,7 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         self.log("Final datetime range:", start_datetime, "to", end_datetime)
         return start_datetime, end_datetime
 
-    def get_base_queryset(self, start_datetime, end_datetime):
+    def get_base_queryset(self, start_datetime, end_datetime, search=None):
         """Get base queryset filtered by date range and transaction types"""
         qs = GHLTransaction.objects.filter(
             parsed_date__range=[start_datetime, end_datetime],
@@ -1710,6 +1710,12 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         ).select_related('ghl_credential')
 
         self.log("Base queryset count:", qs.count())
+
+        if search:
+            qs = qs.filter(
+                Q(ghl_credential__location_name__icontains=search) |
+                Q(ghl_credential__location_id__icontains=search)
+            )
         return qs
 
 
@@ -1737,7 +1743,9 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             start_datetime, end_datetime = self.parse_date_range(data.get('date_range'))
             
             # Get base queryset
-            base_queryset = self.get_base_queryset(start_datetime, end_datetime)
+
+            search = data.get("search", "").strip() or None
+            base_queryset = self.get_base_queryset(start_datetime, end_datetime,search)
             
             if view_type == 'account':
                 self.log("Computing account-level analytics")
