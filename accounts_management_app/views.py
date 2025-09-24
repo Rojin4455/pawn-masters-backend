@@ -1970,18 +1970,23 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             # Get filtering IDs
             if view_type == 'account':
                 location_ids = data.get('location_ids', [])
+                # if not location_ids:
+                #     return Response(
+                #         {'error': 'location_ids is required for account view'},
+                #         status=status.HTTP_400_BAD_REQUEST
+                #     )
+                
                 if not location_ids:
-                    return Response(
-                        {'error': 'location_ids is required for account view'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                    location_ids = GHLAuthCredentials.objects.all().values_list("location_id", flat=True)
             else:
                 company_ids = data.get('company_ids', [])
+                # if not company_ids:
+                #     return Response(
+                #         {'error': 'company_ids is required for company view'},
+                #         status=status.HTTP_400_BAD_REQUEST
+                #     )
                 if not company_ids:
-                    return Response(
-                        {'error': 'company_ids is required for company view'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                    company_ids = GHLAuthCredentials.objects.all().values_list("company_id", flat=True).distinct()
             
             # Get base queryset
             base_queryset = self.get_base_queryset(start_datetime, end_datetime)
