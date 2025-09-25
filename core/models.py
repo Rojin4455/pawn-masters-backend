@@ -20,7 +20,7 @@ class GHLAuthCredentials(models.Model):
     location_name = models.CharField(max_length=255, null=True, blank=True)
     company_name = models.CharField(max_length=255, default="Pawn Leads")
     timezone = models.CharField(max_length=100, null=True, blank=True, default="")
-    is_approved = models.BooleanField(default=False)
+    is_approved = models.BooleanField(default=True)
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='locations')
     inbound_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)    
     outbound_rate = models.DecimalField(max_digits=10, decimal_places=7, help_text="Rate in USD, e.g., 0.10 for 10 cents", null=True, blank=True)

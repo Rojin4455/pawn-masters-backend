@@ -1091,7 +1091,7 @@ class AnalyticsComputer:
 
 
 
-def fetch_transactions_for_location(ghl_credential: 'GHLAuthCredentials', days_ago_start=3, days_ago_end=0, page_limit=50):
+def fetch_transactions_for_location(ghl_credential: 'GHLAuthCredentials', days_ago_start=10, days_ago_end=0, page_limit=50):
     print(f"Fetching transactions for {ghl_credential.location_name} (ID: {ghl_credential.location_id})")
 
     token_id = get_ghl_auth_token(ghl_credential)
