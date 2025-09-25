@@ -80,3 +80,43 @@ def trigger_on_approval(sender, instance, **kwargs):
 
         print(f"GHLAuthCredentials {instance.id} is now approved! "
               f"Sync started on queue {queue}, task_id={result.id}, log_id={log.id}")
+        
+
+from django.utils import timezone
+from django.db.models import Exists, OuterRef
+
+def sync_location():
+    # fetch all approved GHLAuthCredentials objects with no LocationSyncLog
+    locations_without_logs = (
+        GHLAuthCredentials.objects.filter(is_approved=True)
+        .annotate(
+            has_log=Exists(
+                LocationSyncLog.objects.filter(location=OuterRef("id"))
+            )
+        )
+        .filter(has_log=False)   # keep only those without logs
+    )
+
+    queues = ['data_sync', 'celery', 'priority']
+
+    for i, loc in enumerate(locations_without_logs, 1):
+        # round-robin queue assignment
+        queue = queues[(i - 1) % len(queues)]
+
+        print(loc.id, loc.location_name, loc.location_id)
+
+        log = LocationSyncLog.objects.create(
+            location=loc,
+            status="pending",
+            started_at=timezone.now()
+        )
+
+        result = sync_location_data_sequential.apply_async(
+            args=[loc.location_id, loc.access_token],
+            queue=queue
+        )
+
+        print(
+            f"GHLAuthCredentials {loc.id} is now approved! {queue}"
+            # f"Sync started on queue {queue}, task_id={result.id}, log_id={log.id}"
+        )

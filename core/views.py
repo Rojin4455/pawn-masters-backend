@@ -95,7 +95,7 @@ def tokens(request):
                 "timezone": timezone
             }
         )
-
+        
         obj.is_approved=True
         obj.save()
         query_params = urlencode({
