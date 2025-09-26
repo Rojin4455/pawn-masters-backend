@@ -1851,7 +1851,7 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
                     'total_inbound_usage': sms_inbound_usage + call_inbound_usage,
                     'total_outbound_usage': sms_outbound_usage + call_outbound_usage,
                 },
-                'wallet_balance': int(row['wallet_balance'] or 0)
+                'wallet_balance': float(row['wallet_balance'] or 0.0)
             }
             results.append(result)
 
@@ -1933,7 +1933,7 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
                     'total_usage': sms_inbound_usage + sms_outbound_usage + call_inbound_usage + call_outbound_usage,
                     'locations_count': row['locations_count']
                 },
-                'wallet_balance': int(row['wallet_total_balance'] or 0)
+                'wallet_balance': float(row['wallet_total_balance'] or 0.0)
             }
             results.append(result)
             
