@@ -1635,21 +1635,29 @@ class AnalyticsPagination(PageNumberPagination):
     page_size_query_param = 'page_size'
     max_page_size = 100
 
+from django.core.cache import cache
+from django.db.models import Prefetch
+import hashlib
 
 class TransactionAnalyticsViewSet(viewsets.ViewSet):
     """
-    ViewSet for handling transaction analytics endpoints
+    ViewSet for handling transaction analytics endpoints - OPTIMIZED
     """
     pagination_class = AnalyticsPagination
+    CACHE_TIMEOUT = 300  # 5 minutes
 
     def log(self, *args):
         """Helper logger for consistent debug prints"""
         print("[TransactionAnalytics]", *args)
 
+    def get_cache_key(self, prefix, params):
+        """Generate cache key from parameters"""
+        param_str = json.dumps(params, sort_keys=True)
+        param_hash = hashlib.md5(param_str.encode()).hexdigest()
+        return f"{prefix}:{param_hash}"
+
     def get_paginator(self):
-        """
-        Return the paginator instance associated with the view, or None.
-        """
+        """Return the paginator instance associated with the view, or None."""
         if not hasattr(self, '_paginator'):
             if self.pagination_class is None:
                 self._paginator = None
@@ -1658,18 +1666,14 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         return self._paginator
 
     def paginate_queryset(self, data):
-        """
-        Return a single page of results, or None if pagination is disabled.
-        """
+        """Return a single page of results, or None if pagination is disabled."""
         paginator = self.get_paginator()
         if paginator is None:
             return None
         return paginator.paginate_queryset(data, self.request, view=self)
 
     def get_paginated_response(self, data, extra_data=None):
-        """
-        Return a paginated style `Response` object for the given output data.
-        """
+        """Return a paginated style `Response` object for the given output data."""
         paginator = self.get_paginator()
         if paginator is None:
             response_data = extra_data or {}
@@ -1703,11 +1707,23 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
         return start_datetime, end_datetime
 
     def get_base_queryset(self, start_datetime, end_datetime, search=None):
-        """Get base queryset filtered by date range and transaction types"""
+        """Get base queryset filtered by date range and transaction types - OPTIMIZED"""
         qs = GHLTransaction.objects.filter(
             parsed_date__range=[start_datetime, end_datetime],
             transaction_type__in=['sms_inbound', 'sms_outbound', 'call_inbound', 'call_outbound']
         ).select_related('ghl_credential')
+
+        # Only select fields we actually need
+        qs = qs.only(
+            'transaction_type',
+            'amount',
+            'duration',
+            'total_segments',
+            'ghl_credential__location_id',
+            'ghl_credential__location_name',
+            'ghl_credential__company_id',
+            'ghl_credential__company_name'
+        )
 
         self.log("Base queryset count:", qs.count())
 
@@ -1718,14 +1734,37 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             )
         return qs
 
-
-    
-    
+    def get_wallet_balances_map(self, credential_ids=None, group_by_company=False):
+        """
+        Pre-fetch all wallet balances in a single query
+        Returns: dict mapping credential_id -> balance or company_id -> total_balance
+        """
+        wallet_qs = GHLWalletBalance.objects.all()
+        
+        if credential_ids:
+            wallet_qs = wallet_qs.filter(ghl_credential_id__in=credential_ids)
+        
+        if group_by_company:
+            # Group by company
+            wallet_data = wallet_qs.values('ghl_credential__company_id').annotate(
+                total_balance=Sum('current_balance')
+            )
+            return {
+                row['ghl_credential__company_id']: float(row['total_balance'] or 0.0)
+                for row in wallet_data
+            }
+        else:
+            # Individual credentials
+            wallet_data = wallet_qs.values('ghl_credential_id', 'current_balance')
+            return {
+                row['ghl_credential_id']: float(row['current_balance'] or 0.0)
+                for row in wallet_data
+            }
 
     @action(detail=False, methods=['post'], url_path='usage-analytics')
     def usage_analytics(self, request):
         """
-        POST /api/accounts/analytics/usage-analytics/
+        POST /api/accounts/analytics/usage-analytics/ - OPTIMIZED WITH CACHING
         """
         try:
             data = request.data
@@ -1741,18 +1780,36 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             
             # Parse date range
             start_datetime, end_datetime = self.parse_date_range(data.get('date_range'))
-            
-            # Get base queryset
-
             search = data.get("search", "").strip() or None
-            base_queryset = self.get_base_queryset(start_datetime, end_datetime,search)
             
-            if view_type == 'account':
-                self.log("Computing account-level analytics")
-                results = self.get_account_analytics(base_queryset)
+            # Generate cache key
+            cache_params = {
+                'view_type': view_type,
+                'start': start_datetime.isoformat(),
+                'end': end_datetime.isoformat(),
+                'search': search
+            }
+            cache_key = self.get_cache_key('analytics', cache_params)
+            
+            # Try to get from cache
+            cached_results = cache.get(cache_key)
+            if cached_results:
+                self.log("Returning cached results")
+                results = cached_results
             else:
-                self.log("Computing company-level analytics")
-                results = self.get_company_analytics(base_queryset)
+                # Get base queryset
+                base_queryset = self.get_base_queryset(start_datetime, end_datetime, search)
+                
+                if view_type == 'account':
+                    self.log("Computing account-level analytics")
+                    results = self.get_account_analytics(base_queryset)
+                else:
+                    self.log("Computing company-level analytics")
+                    results = self.get_company_analytics(base_queryset)
+                
+                # Cache the results
+                cache.set(cache_key, results, self.CACHE_TIMEOUT)
+                self.log("Results cached for", self.CACHE_TIMEOUT, "seconds")
             
             self.log("Final analytics results count:", len(results))
 
@@ -1780,16 +1837,13 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
 
     def get_account_analytics(self, base_queryset):
         """
-        Get analytics per location (account level) - OPTIMIZED
+        Get analytics per location (account level) - HIGHLY OPTIMIZED
         """
         self.log("Optimized: Computing account-level analytics")
 
-        wallet_balance_subquery = GHLWalletBalance.objects.filter(
-            ghl_credential_id=OuterRef('ghl_credential__id')
-        ).values('current_balance')[:1]
-
-        # Use a single query to get all aggregations at once, grouped by location
+        # Single aggregation query
         location_analytics = base_queryset.values(
+            'ghl_credential__id',
             'ghl_credential__location_id',
             'ghl_credential__company_name',
             'ghl_credential__location_name',
@@ -1806,12 +1860,18 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             total_inbound_call_duration=Sum(Case(When(transaction_type='call_inbound', then=F('duration')))),
             total_outbound_call_duration=Sum(Case(When(transaction_type='call_outbound', then=F('duration')))),
             inbound_sms_segments=Sum(Case(When(transaction_type='sms_inbound', then=F('total_segments')))),
-            outbound_sms_segments=Sum(Case(When(transaction_type='sms_outbound', then=F('total_segments')))),
-            wallet_balance=Subquery(wallet_balance_subquery, output_field=DecimalField())
+            outbound_sms_segments=Sum(Case(When(transaction_type='sms_outbound', then=F('total_segments'))))
         )
         
+        # Convert to list to execute query once
+        location_data = list(location_analytics)
+        
+        # Pre-fetch all wallet balances in ONE query
+        credential_ids = [row['ghl_credential__id'] for row in location_data]
+        wallet_map = self.get_wallet_balances_map(credential_ids)
+        
         results = []
-        for row in location_analytics:
+        for row in location_data:
             sms_inbound_usage = float(row['sms_inbound_usage'] or 0)
             sms_outbound_usage = float(row['sms_outbound_usage'] or 0)
             call_inbound_usage = float(row['call_inbound_usage'] or 0)
@@ -1822,6 +1882,9 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
 
             inbound_segments = int(row['inbound_sms_segments'] or 0)
             outbound_segments = int(row['outbound_sms_segments'] or 0)
+
+            # Get wallet balance from pre-fetched map
+            wallet_balance = wallet_map.get(row['ghl_credential__id'], 0.0)
 
             result = {
                 'company_name': row['ghl_credential__company_name'],
@@ -1851,7 +1914,7 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
                     'total_inbound_usage': sms_inbound_usage + call_inbound_usage,
                     'total_outbound_usage': sms_outbound_usage + call_outbound_usage,
                 },
-                'wallet_balance': float(row['wallet_balance'] or 0.0)
+                'wallet_balance': wallet_balance
             }
             results.append(result)
 
@@ -1860,17 +1923,11 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
 
     def get_company_analytics(self, base_queryset):
         """
-        Get aggregated analytics per company (company level) - OPTIMIZED
+        Get aggregated analytics per company (company level) - HIGHLY OPTIMIZED
         """
         self.log("Optimized: Computing company-level analytics")
 
-        # Use a single query to get all aggregations at once, grouped by company
-        wallet_sum_subquery = GHLWalletBalance.objects.filter(
-            ghl_credential__company_id=OuterRef('ghl_credential__company_id')
-        ).values('ghl_credential__company_id').annotate(
-            total_balance=Sum('current_balance')
-        ).values('total_balance')
-
+        # Single aggregation query without subquery
         company_analytics = base_queryset.values(
             'ghl_credential__company_id',
             'ghl_credential__company_name'
@@ -1887,12 +1944,17 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
             total_outbound_call_duration=Sum(Case(When(transaction_type='call_outbound', then=F('duration')))),
             inbound_sms_segments=Sum(Case(When(transaction_type='sms_inbound', then=F('total_segments')))),
             outbound_sms_segments=Sum(Case(When(transaction_type='sms_outbound', then=F('total_segments')))),
-            locations_count=Count('ghl_credential__location_id', distinct=True),
-            wallet_total_balance=Subquery(wallet_sum_subquery, output_field=DecimalField())
+            locations_count=Count('ghl_credential__location_id', distinct=True)
         )
         
+        # Convert to list to execute query once
+        company_data = list(company_analytics)
+        
+        # Pre-fetch all wallet balances grouped by company in ONE query
+        wallet_map = self.get_wallet_balances_map(group_by_company=True)
+        
         results = []
-        for row in company_analytics:
+        for row in company_data:
             sms_inbound_usage = float(row['sms_inbound_usage'] or 0)
             sms_outbound_usage = float(row['sms_outbound_usage'] or 0)
             call_inbound_usage = float(row['call_inbound_usage'] or 0)
@@ -1903,6 +1965,9 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
 
             inbound_segments = int(row['inbound_sms_segments'] or 0)
             outbound_segments = int(row['outbound_sms_segments'] or 0)
+
+            # Get wallet balance from pre-fetched map
+            wallet_balance = wallet_map.get(row['ghl_credential__company_id'], 0.0)
 
             result = {
                 'company_name': row['ghl_credential__company_name'],
@@ -1933,15 +1998,12 @@ class TransactionAnalyticsViewSet(viewsets.ViewSet):
                     'total_usage': sms_inbound_usage + sms_outbound_usage + call_inbound_usage + call_outbound_usage,
                     'locations_count': row['locations_count']
                 },
-                'wallet_balance': float(row['wallet_total_balance'] or 0.0)
+                'wallet_balance': wallet_balance
             }
             results.append(result)
             
         self.log("Optimized: Returning", len(results), "company results")
         return results
-
-
-
     
 
     
